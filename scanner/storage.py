@@ -7,6 +7,8 @@ DB_PATH = "data/signals/scanner_history.db"
 def init_db():
     """Initialise la base de données SQLite."""
     conn = sqlite3.connect(DB_PATH)
+    # Mode WAL pour supporter les accès concurrents (Audit Tech 3.2)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     
     # Table des scans (métadonnées)
@@ -16,7 +18,8 @@ def init_db():
             scan_date TEXT UNIQUE,
             market_regime TEXT,
             spy_price REAL,
-            spy_ma200 REAL,
+            spy_ema200 REAL,
+            vix REAL,
             universe_size INTEGER,
             eligible_count INTEGER
         )
@@ -58,19 +61,24 @@ def save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_dat
     # 1. Insérer le scan
     market_regime = market_data.get("regime", "unknown") if market_data else "unknown"
     spy_price = market_data.get("spy_price") if market_data else None
-    spy_ma200 = market_data.get("spy_ma200") if market_data else None
+    spy_ema200 = market_data.get("spy_ema200") if market_data else None
+    current_vix = market_data.get("vix") if market_data else None
     
     try:
         cursor.execute('''
-            INSERT INTO scans (scan_date, market_regime, spy_price, spy_ma200, universe_size, eligible_count)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (scan_date, market_regime, spy_price, spy_ma200, universe_size, len(top_stocks)))
+            INSERT INTO scans (scan_date, market_regime, spy_price, spy_ema200, vix, universe_size, eligible_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (scan_date, market_regime, spy_price, spy_ema200, current_vix, universe_size, len(top_stocks)))
         scan_id = cursor.lastrowid
     except sqlite3.IntegrityError:
         # Déjà un scan pour aujourd'hui, on le récupère
         cursor.execute('SELECT id FROM scans WHERE scan_date = ?', (scan_date,))
         scan_id = cursor.fetchone()[0]
-        # On pourrait supprimer les anciens signaux pour ce scan_id si on veut écraser
+        # On met à jour les métadonnées et on nettoie les anciens signaux
+        cursor.execute('''
+            UPDATE scans SET market_regime = ?, spy_price = ?, spy_ema200 = ?, vix = ?, universe_size = ?, eligible_count = ?
+            WHERE id = ?
+        ''', (market_regime, spy_price, spy_ema200, current_vix, universe_size, len(top_stocks), scan_id))
         cursor.execute('DELETE FROM signals WHERE scan_id = ?', (scan_id,))
 
     # 2. Insérer les stocks

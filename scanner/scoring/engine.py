@@ -156,7 +156,7 @@ def stock_scoring_pipeline(all_data, symbols):
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
     df["rank_outperf_6m"] = compute_percentile_ranks(df, "outperf_6m")
     df["rank_perf_3m"] = compute_percentile_ranks(df, "perf_3m")
-    df["rank_sales_growth"] = compute_percentile_ranks(df, "sales_growth")
+    df["rank_surprise"] = compute_percentile_ranks(df, "surprise_pct")
 
     # Scores
     qw = CONFIG["scoring"]["quality_subweights"]
@@ -174,7 +174,7 @@ def stock_scoring_pipeline(all_data, symbols):
         df["rank_perf_6m"].fillna(0) * mw["perf_6m"] +
         df["rank_outperf_6m"].fillna(0) * mw["outperf_6m"] +
         df["rank_perf_3m"].fillna(0) * mw["perf_3m"] +
-        df["rank_sales_growth"].fillna(0) * mw["sales_growth"]
+        df["rank_surprise"].fillna(0) * mw["sales_growth"]
     )
 
     df["score_momentum"] = df.apply(lambda r: apply_momentum_penalties(r["score_momentum"], r), axis=1)

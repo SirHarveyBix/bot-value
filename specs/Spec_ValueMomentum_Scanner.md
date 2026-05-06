@@ -102,7 +102,7 @@ Version          : 1.0
 Horizon cible    : Signals pour positions 3 à 6 mois
 Fréquence        : Quotidienne (jours de bourse US uniquement)
 Déclenchement    : 09h30 ET (après ouverture NYSE)
-Sortie principale : Alertes Telegram + fichier JSON historique
+Sortie principale : Alertes Telegram + Base de données SQLite (`scanner_history.db`)
 Environnement    : Mac Mini (serveur local), macOS
 Langage          : Python 3.11+
 ```
@@ -207,7 +207,7 @@ async with httpx.AsyncClient() as client:
 
 Le système applique un **Rate Limiting Séquentiel** strict pour éviter le bannissement IP (Erreur 429) :
 
-1. **Délai asynchrone** : Entre chaque appel `.info` (yfinance) ou API (FMP), un `await asyncio.sleep(INTER_REQUEST_DELAY)` est observé.
+1. **Délai asynchrone jittered** : Entre chaque appel `.info` (yfinance) ou API (FMP), un délai aléatoire compris entre **0.8s et 1.5s** (`await asyncio.sleep(random.uniform(0.8, 1.5))`) est observé pour simuler un comportement humain et éviter le bannissement IP.
 2. **INTER_REQUEST_DELAY** : Fixé à 1.0s par défaut pour garantir la pérennité de l'accès Yahoo Finance.
 3. **MAX_RETRIES** : 3 tentatives avec backoff exponentiel asynchrone.
 4. **Fallback** : Si FMP échoue sur un ticker de la shortlist, le système tente un fallback asynchrone vers `yf.Ticker(ticker).info` (via `to_thread`).
@@ -274,25 +274,25 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 ## 4. Module 3 — Scoring Engine
 
 ### 4.0 Filtre de Régime (Market Gate) — PRIORITÉ SURVIE
+Pour éviter l'effet de "Whipsaw" (oscillations autour d'une moyenne simple), le système utilise un double filtre de stress :
+- **Indicateurs** : Moyenne Mobile Exponentielle 200 jours (EMA 200) du SPY + Indice de Volatilité (VIX).
+- **Règle de Survie** : Le marché est considéré en **Stress Majeur** uniquement si :
+  `Prix SPY < EMA 200 SPY` **ET** `VIX > 25`.
+- **Conséquence** : Si cette double condition est réunie, une alerte `🚨 RÉGIME DE PANIQUE : EXPOSITION DÉCONSEILLÉE` est émise. Tant que le VIX reste sous 25, une cassure d'EMA 200 est traitée comme une respiration de marché et non un krach.
 
-Avant tout calcul de scoring ou d'éligibilité shortlist, le système vérifie la tendance globale du marché US.
-
-- **Indicateur** : Moyenne Mobile Simple 200 jours (MA200) du SPY.
-- **Règle de Survie** : Si `Prix SPY < MA200 SPY`, le marché est considéré en régime baissier (Bear Market).
-- **Conséquence** : Le scan continue pour information, mais tous les signaux sont marqués d'une alerte critique `🚨 MARCHÉ BAISSIER (SPY < MA200) : EXPOSITION DÉCONSEILLÉE`. Aucun signal "Top Action" ne doit être considéré comme une recommandation d'achat immédiate dans ce régime.
 
 ### 4.1 Pipeline Actions : définition des critères
 
 #### PILIER 1 : QUALITÉ (pondération 35%)
 
-| Métrique             | Donnée yfinance                    | Calcul                                    | Ranking            |
+| Métrique             | Source                             | Calcul                                    | Ranking            |
 | -------------------- | ---------------------------------- | ----------------------------------------- | ------------------ |
-| ROE (Moyenne 3 ans)  | `ticker.financials`                | Moyenne du ROE sur les 3 derniers bilans  | Cross-universe     |
-| Marge opérationnelle | `operatingMargins`                 | Valeur directe                            | Intra-secteur GICS |
-| Dette nette / EBITDA | `totalDebt`, `totalCash`, `ebitda` | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
-| FCF Yield proxy      | `freeCashflow`, `marketCap`        | freeCashflow / marketCap                  | Cross-universe     |
+| ROE (Moyenne 3 ans)  | API FMP (Sniper)                   | Moyenne du ROE sur les 3 derniers bilans  | Cross-universe     |
+| Marge opérationnelle | yfinance / FMP                     | Valeur directe                            | Intra-secteur GICS |
+| Dette nette / EBITDA | yfinance / FMP                     | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
+| FCF Yield proxy      | yfinance / FMP                     | freeCashflow / marketCap                  | Cross-universe     |
 
-> **Note ROE** : `yfinance` retourne uniquement le ROE TTM via `returnOnEquity`. La moyenne 3 ans nécessite `ticker.financials` (3 bilans annuels) — complexité supplémentaire documentée dans le Module 2. En v1, ROE TTM est utilisé comme proxy. Si la stabilité du ROE est critique, v1.1 pourra ajouter la moyenne glissante.
+> **Note ROE** : L'utilisation du ROE TTM est proscrite car potentiellement faussée par des effets de levier ou des cessions exceptionnelles. Le calcul moyen sur 3 ans est **obligatoire** et récupéré via les endpoints `income-statement` et `balance-sheet-statement` de l'API FMP.
 
 > **Note secteurs exclus du calcul dette/EBITDA** : Financières (banques, assurances) et REITs ont des structures bilancielles incompatibles avec ce ratio. Traitement spécifique documenté en section 4.4.
 
@@ -348,11 +348,9 @@ Avant tout calcul de scoring ou d'éligibilité shortlist, le système vérifie 
 | Performance 6 mois            | (Prix J0 - Prix J-126) / Prix J-126            | Cross-universe |
 | Performance 3 mois            | (Prix J0 - Prix J-63) / Prix J-63              | Cross-universe |
 | Surperformance sectorielle 6M | Perf 6M ticker - Perf 6M ETF sectoriel SPDR    | Intra-secteur  |
-| Traction Fondamentale (proxy) | `revenueGrowth` (TTM yfinance) — croissance CA | Cross-universe |
+| Surprise Earnings % (Sniper)  | (BPA Publié - BPA Attendu) / BPA Attendu       | Cross-universe |
 
-> **Définition Prix J0** : close du dernier jour de bourse disponible avant le déclenchement du scan (= close J-1). À 09h30 ET, le marché vient d'ouvrir — les prix intraday ne sont pas utilisés. `yf.download(ticker, period="1d")["Close"].iloc[-1]` du jour précédent.
-
-> **Honnêteté sur le Momentum Fondamental** : En l'absence de données de révision de consensus (donnée forward-looking payante) au niveau du screening global, nous utilisons la croissance du chiffre d'affaires TTM. C'est un indicateur **rétrospectif** (backward-looking). Pour pallier cela, le système utilise l'API FMP à l'étape 2 (Sniper) pour valider la traction fondamentale avec des données institutionnelles.
+> **Note Momentum Fondamental** : Le "Surprise Earnings %" est le seul proxy fiable et accessible pour capturer l'accélération d'une entreprise. Il remplace la croissance du CA TTM (trop tardive). Cette donnée est récupérée via l'API FMP lors de l'étape 2 (Sniper).
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
 
@@ -386,7 +384,7 @@ Les pénalités s'appliquent sur le **score momentum final** (après calcul de l
 - Perf 6 mois : 30%
 - Surperf sectorielle 6M : 35%
 - Perf 3 mois : 20%
-- Traction Fondamentale (CA) : 15%
+- Surprise Earnings % : 15%
 
 ---
 
@@ -476,11 +474,11 @@ Pour éviter que le top 10 soit dominé par un seul secteur :
 ```
 actions_ranked : liste triée par score_global décroissant
     → top 10 envoyés par Telegram
-    → top 50 stockés en JSON
+    → Historique complet stocké dans SQLite
 
 etfs_ranked : liste triée par score_etf décroissant
     → top 5 envoyés par Telegram
-    → top 20 stockés en JSON
+    → Historique complet stocké dans SQLite
 ```
 
 ---
@@ -601,94 +599,23 @@ async def send_signals(tickers: list):
 ## 7. Module 6 — Storage & History (SQLite)
 
 ### 7.1 Stratégie de stockage
+Le stockage repose sur une base de données **SQLite** (`data/signals/scanner_history.db`). Pour supporter les accès concurrents sans verrouillage (Bot en écriture + Dashboard en lecture), le mode **WAL (Write-Ahead Logging)** est activé (`PRAGMA journal_mode=WAL;`).
 
-Le stockage repose sur une base de données **SQLite** (`data/signals/scanner_history.db`) pour garantir l'intégrité des données lors d'accès concurrents (Bot + Dashboard Web).
-
-### 7.2 Structure de la base de données
+### 7.2 Structure de la base de données (SQLite)
 
 - **Table `scans`** : Enregistre chaque run (date, métriques marché comme SPY MA200).
 - **Table `signals`** : Stocke les signaux Top 10 et Top 5 ETFs avec tous leurs scores et métriques.
 - **Table `universe_metadata`** : Historique de la taille de l'univers et des exclusions.
 
-### 7.3 Cache (JSON persistant)
-
-```
-data/
-├── universe/
-│   ├── tickers_universe.json          # Fichier statique mis à jour mensuellement
-│   └── eligible_universe_YYYY-MM-DD.json  # Univers filtré du jour
-├── cache/
-│   └── fundamentals_cache.json        # Cache des données yfinance (TTL 24h)
-└── logs/
-    └── scanner_YYYY-MM-DD.log         # Logs du run quotidien
-```
-
-### 7.2 Structure d'un fichier signals_YYYY-MM-DD.json
-
-```json
-{
-  "scan_date": "2025-01-15",
-  "scan_timestamp": "2025-01-15T14:35:22Z",
-  "universe_size": 687,
-  "eligible_count": 623,
-  "metadata": {
-    "sp500_performance_day": 0.0032,
-    "vix_level": 14.2,
-    "market_regime": "bull"
-  },
-  "top_stocks": [
-    {
-      "rank": 1,
-      "ticker": "MSFT",
-      "name": "Microsoft Corp",
-      "sector": "Technology",
-      "market_cap_b": 3100,
-      "score_global": 87.3,
-      "score_quality": 91.2,
-      "score_valuation": 72.1,
-      "score_momentum": 92.4,
-      "metrics": {
-        "pe_forward": 28.4,
-        "ev_ebitda": 21.3,
-        "peg_ratio": 2.1,
-        "roe_ttm": 0.382,
-        "operating_margin": 0.441,
-        "net_debt_ebitda": 0.8,
-        "fcf_yield": 0.024,
-        "perf_6m": 0.183,
-        "perf_3m": 0.092,
-        "sector_outperf_6m": 0.071,
-        "eps_revision_3m": 0.043
-      },
-      "flags": {
-        "earnings_upcoming": true,
-        "earnings_date": "2025-01-29",
-        "data_freshness_warning": false,
-        "valuation_estimated": false
-      },
-      "yahoo_url": "https://finance.yahoo.com/quote/MSFT"
-    }
-  ],
-  "top_etfs": [],
-  "excluded_count": 64,
-  "exclusion_reasons": {
-    "low_volume": 23,
-    "low_market_cap": 18,
-    "negative_roe": 9,
-    "high_debt": 8,
-    "missing_data": 6
-  }
-}
-```
+### 7.3 Cache & Univers (JSON)
+Les fichiers JSON sont conservés uniquement pour le cache temporaire et la gestion de l'univers de départ.
 
 ---
 
 ## 8. Interface HTML (v1.0 Statique / v1.1 Dynamique)
 
 ### 8.1 Approche v1.0
-
-Une page HTML statique générée quotidiennement depuis le JSON `signals_latest.json`.
-
+Une page HTML statique interrogeant un export JSON temporaire généré depuis la base **SQLite**.
 - **Stack** : Vanilla JS + http.server.
 
 ### 8.2 Transition v1.1 (Roadmap)
@@ -718,7 +645,7 @@ valuemomentum-scanner/
 │   │   └── engine.py           # Score global + ranking
 │   ├── filters.py              # Module 4 : Post-scoring filters
 │   ├── notifier.py             # Module 5 : Telegram
-│   └── storage.py              # Module 6 : JSON storage
+│   └── storage.py              # Module 6 : SQLite storage
 │
 ├── data/
 │   ├── universe/
@@ -749,7 +676,7 @@ pandas>=2.1.0,<3.0.0
 numpy>=1.26.0,<2.0.0          # >= 1.26 requis par pandas 2.x
 
 # Scheduling
-APScheduler>=3.10.0,<4.0.0    # 3.x = synchrone, compatible avec asyncio.run()
+apscheduler>=4.0.0a5           # v4.x natif async (résout les conflits d'event loop)
 pandas-market-calendars>=4.3.0 # Calendrier trading US — exclure jours fériés NYSE
 
 # Alertes
@@ -772,7 +699,7 @@ pytest>=8.0.0
 pytest-asyncio>=0.23.0
 ```
 
-> **Note async** : `python-telegram-bot 21.x` est async. Nous utilisons `AsyncIOScheduler` (APScheduler 3.x) pour une intégration native. La boucle d'événement est gérée par `asyncio.run(main())` qui maintient le scheduler actif.
+> **Note async** : La version 4.x d'APScheduler permet une intégration native avec `asyncio`. Le scheduler est lancé au sein de la même boucle d'événements que le bot Telegram, garantissant une fiabilité totale 24/7.
 
 ---
 
@@ -960,19 +887,21 @@ Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
 
 ## 15. Roadmap et évolutions futures
 
-### v1.0 (scope actuel)
+### v1.0 (scope actuel - TERMINÉ)
 
 - [x] Scanner quotidien Actions + ETFs
 - [x] Scoring 3 piliers (Qualité, Valorisation, Momentum)
 - [x] **Intégration API FMP** pour le Sniper (fondamentaux fiables)
-- [x] Alertes Telegram
-- [x] Stockage JSON
+- [x] Alertes Telegram (Asynchrones)
+- [x] **Orchestration Native Asynchrone** (APScheduler 4.x)
+- [x] **Stockage SQLite** (scanner_history.db)
+- [x] **Market Gate** (Filtre SPY MA200)
 
 ### v1.1
 
-- [ ] Interface HTML viewer
-- [ ] Migration vers **SQLite** pour le stockage historique
-- [ ] Historique de performance des signaux (track record)
+- [ ] Interface HTML viewer (dynamique via FastAPI)
+- [ ] Historique de performance des signaux (track record automatique)
+- [ ] Alertes de changement de régime de marché en temps réel
 
 ---
 
@@ -980,7 +909,7 @@ Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
 
 1. **Hybride yfinance / FMP** : yfinance est utilisé pour le volume (prix OHLCV) et FMP pour la précision (fondamentaux shortlist). Le bot doit pouvoir fonctionner avec yfinance seul si la clé FMP est absente (fallback).
 
-2. **Le Mac Mini est en local** — pas de cloud. Le stockage reste local (JSON puis SQLite).
+2. **Le Mac Mini est en local** — pas de cloud. Le stockage est 100% **SQLite** pour l'historique, avec des fichiers JSON pour l'univers et le cache.
 
 3. **Aucun ordre n'est exécuté** — ce système est un scanner de décision.
 

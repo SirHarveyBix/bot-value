@@ -1,4 +1,5 @@
 import asyncio
+import random
 import httpx
 import pandas as pd
 import yfinance as yf
@@ -48,8 +49,6 @@ async def fetch_fmp_data(client, symbol):
         return None
 
     try:
-        # On regroupe les appels pour paralléliser légèrement si besoin, 
-        # mais on reste prudent sur le rate limit du plan gratuit (250/jour)
         # 1. Ratios TTM (ROE, Marges, P/E, PEG)
         r_task = client.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}")
         # 2. Key Metrics TTM (Net Debt / EBITDA, Market Cap)
@@ -60,8 +59,10 @@ async def fetch_fmp_data(client, symbol):
         is_task = client.get(f"{base_url}/income-statement/{symbol}?limit=3&apikey={api_key}")
         # 5. Balance Sheet Annual (pour ROE historique)
         bs_task = client.get(f"{base_url}/balance-sheet-statement/{symbol}?limit=3&apikey={api_key}")
+        # 6. Surprise Earnings (Momentum Fondamental)
+        s_task = client.get(f"{base_url}/earnings-surprises/{symbol}?apikey={api_key}")
 
-        responses = await asyncio.gather(r_task, k_task, p_task, is_task, bs_task)
+        responses = await asyncio.gather(r_task, k_task, p_task, is_task, bs_task, s_task)
         
         if all(resp.status_code == 200 for resp in responses):
             r_data = responses[0].json()
@@ -69,19 +70,25 @@ async def fetch_fmp_data(client, symbol):
             p_data = responses[2].json()
             is_data = responses[3].json()
             bs_data = responses[4].json()
+            s_data = responses[5].json()
 
             if r_data and k_data and p_data:
                 r = r_data[0]
                 k = k_data[0]
                 p = p_data[0]
                 
-                # Calcul ROE 3 ans (FMP)
+                # Surprise % du dernier trimestre
+                surprise_pct = 0
+                if s_data and len(s_data) > 0:
+                    surprise_pct = s_data[0].get("surprisePercentage", 0) / 100.0
+
+                # Calcul ROE 3 ans (FMP) - OBLIGATOIRE
                 roe_3y = None
                 if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
                     roes = []
                     for i in range(min(3, len(is_data), len(bs_data))):
                         ni = is_data[i].get("netIncome", 0)
-                        te = bs_data[i].get("totalStockholdersEquity", 1) # Avoid div by zero
+                        te = bs_data[i].get("totalStockholdersEquity", 1)
                         if te and te > 0:
                             roes.append(ni / te)
                     if roes:
@@ -92,7 +99,7 @@ async def fetch_fmp_data(client, symbol):
                     "longName": p.get("companyName"),
                     "sector": p.get("sector"),
                     "marketCap": p.get("mktCap"),
-                    "returnOnEquity": roe_3y if roe_3y is not None else r.get("returnOnEquityTTM"),
+                    "returnOnEquity": roe_3y, # ROE 3 ans obligatoire
                     "roe_ttm": r.get("returnOnEquityTTM"),
                     "roe_3y": roe_3y,
                     "operatingMargins": r.get("operatingProfitMarginTTM"),
@@ -104,7 +111,7 @@ async def fetch_fmp_data(client, symbol):
                     "forwardPE": r.get("priceEarningsRatioTTM"),
                     "enterpriseToEbitda": r.get("enterpriseValueOverEBITDATTM"),
                     "pegRatio": r.get("pegRatioTTM"),
-                    "revenueGrowth": r.get("revenueGrowthTTM"),
+                    "surprise_pct": surprise_pct,
                     "source": "FMP"
                 }
         return None
@@ -139,20 +146,21 @@ async def fetch_ticker_info(symbol, client=None):
         cache.set("fundamentals", symbol, info)
     return info
 
-async def fetch_spy_history():
-    """Récupère l'historique du SPY pour le calcul de la MA200."""
-    logger.info("Récupération de l'historique SPY pour le Market Gate...")
+async def fetch_market_indices():
+    """Récupère l'historique du SPY et du VIX pour le Market Gate."""
+    logger.info("Récupération du SPY et du VIX pour le Market Gate...")
     try:
-        data = await asyncio.to_thread(
+        # On prend 1.5 an pour être sûr d'avoir 200 jours de bourse pour l'EMA
+        indices = await asyncio.to_thread(
             yf.download,
-            tickers="SPY",
-            period="2y", # On prend 2 ans pour être sûr d'avoir 200 jours de bourse
+            tickers="SPY ^VIX",
+            period="2y",
             progress=False,
             auto_adjust=True
         )
-        return data
+        return indices
     except Exception as e:
-        logger.error(f"Erreur fetch SPY: {e}")
+        logger.error(f"Erreur fetch indices marché: {e}")
         return pd.DataFrame()
 
 async def fetch_all_data(tickers, etfs=None, prices_batch=None):
@@ -168,12 +176,11 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
     if prices_batch is None:
         prices_batch = await fetch_prices_batch(all_tickers)
 
-    delay = CONFIG["scanner"].get("inter_request_delay", 1.0)
-    
     async with httpx.AsyncClient(timeout=30.0) as client:
         for i, symbol in enumerate(tickers):
-            if i > 0 and delay > 0:
-                await asyncio.sleep(delay)
+            if i > 0:
+                # Délai jittered (0.8s - 1.5s) pour résilience IP (Audit Tech 3.1)
+                await asyncio.sleep(random.uniform(0.8, 1.5))
                 
             logger.info(f"Sniper : Récupération des fondamentaux pour {symbol}...")
             info = await fetch_ticker_info(symbol, client=client)

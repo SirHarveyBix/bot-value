@@ -6,7 +6,7 @@ pandas>=2.1.0,<3.0.0
 numpy>=1.26.0,<2.0.0
 
 # Scheduling
-APScheduler>=3.10.0,<4.0.0
+apscheduler>=4.0.0a5
 pandas-market-calendars>=4.3.0
 
 # Alertes

@@ -3,11 +3,12 @@ import asyncio
 from datetime import datetime
 
 import pandas_market_calendars as mcal
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler import AsyncScheduler
+from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone
 
 from scanner.config import logger
-from scanner.fetcher import fetch_all_data, fetch_prices_batch, fetch_spy_history
+from scanner.fetcher import fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.notifier import notify
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
@@ -31,20 +32,31 @@ async def run_scanner(force=False):
         return
 
     try:
-        # 0. Market Gate : Vérification de la tendance (SPY MA200)
-        spy_history = await fetch_spy_history()
+        # 0. Market Gate : EMA 200 + VIX (Section 4.0)
+        market_history = await fetch_market_indices()
         market_regime = "unknown"
-        if not spy_history.empty:
-            spy_close = spy_history["Close"]
-            ma200 = spy_close.rolling(window=200).mean().iloc[-1]
-            current_spy = spy_close.iloc[-1]
-            
-            if current_spy < ma200:
-                market_regime = "bear"
-                logger.warning(f"🚨 MARCHÉ BAISSIER DÉTECTÉ (SPY {current_spy:.2f} < MA200 {ma200:.2f})")
+        current_spy = None
+        ema200 = None
+        current_vix = None
+
+        if not market_history.empty:
+            spy_close = market_history["Close"]["SPY"]
+            vix_close = market_history["Close"]["^VIX"]
+
+            ema200 = spy_close.ewm(span=200, adjust=False).mean().iloc[-1].item()
+            current_spy = spy_close.iloc[-1].item()
+            current_vix = vix_close.iloc[-1].item()
+
+            # Règle de Stress : SPY < EMA 200 ET VIX > 25
+            if current_spy < ema200 and current_vix > 25:
+                market_regime = "stress"
+                logger.warning(f"🚨 RÉGIME DE PANIQUE DÉTECTÉ (SPY {current_spy:.2f} < EMA200 {ema200:.2f} ET VIX {current_vix:.1f} > 25)")
+            elif current_spy < ema200:
+                market_regime = "bear_light"
+                logger.info(f"⚠️ MARCHÉ SOUS EMA 200 (VIX {current_vix:.1f} calme) - Vigilance.")
             else:
                 market_regime = "bull"
-                logger.info(f"✅ MARCHÉ HAUSSIER (SPY {current_spy:.2f} > MA200 {ma200:.2f})")
+                logger.info(f"✅ MARCHÉ SAIN (SPY {current_spy:.2f} > EMA 200 {ema200:.2f})")
 
         # 1. Universe Builder
         universe = load_universe()
@@ -55,55 +67,49 @@ async def run_scanner(force=False):
         eligible_stocks = build_eligible_universe(initial_stocks)
 
         # 3. Le Chalutier : Fetch uniquement les prix pour tout l'univers éligible
-        # C'est rapide et sans risque de rate-limit 429
         price_data = await fetch_prices_batch(eligible_stocks)
 
-        # Vérification du ratio de données pour le batch
         if not check_batch_data_ratio(price_data, len(eligible_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du batch download.")
             return
         
         # 4. Premier Screening : Momentum uniquement
-        # On calcule le momentum pour les ~700 tickers et on garde le Top 50
         momentum_ranked_df = momentum_screening_pipeline(price_data, eligible_stocks)
         shortlist_stocks = momentum_ranked_df.head(50)["symbol"].tolist()
         
         logger.info(f"Shortlist de {len(shortlist_stocks)} tickers sélectionnés pour analyse approfondie.")
 
         # 5. Le Sniper : Fetch des fondamentaux complets uniquement pour la shortlist
-        # On passe price_data pour éviter de retélécharger les historiques de prix
         all_data = await fetch_all_data(shortlist_stocks, initial_etfs, prices_batch=price_data)
 
-        # Vérification du ratio de données pour la shortlist (Sniper)
         if not check_data_ratio(all_data, len(shortlist_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du fetch des fondamentaux (Sniper).")
             return
 
-        # 6. Scoring Engine Complet (Qualité + Valorisation + Momentum)
-        # On ne score en profondeur que les 50 sélectionnés
+        # 6. Scoring Engine Complet
         ranked_stocks_df = stock_scoring_pipeline(all_data, shortlist_stocks)
         ranked_etfs_df = etf_scoring_pipeline(all_data, initial_etfs)
 
-        # 7. Post-Scoring Filters (Diversification + Freshness + Earnings)
+        # 7. Post-Scoring Filters
         top_10_stocks = filter_post_scoring(ranked_stocks_df, all_data)
         top_5_etfs = ranked_etfs_df.head(5)
 
-        # 7. Storage
+        # 8. Storage
         market_data = {
             "regime": market_regime,
-            "spy_price": current_spy if not spy_history.empty else None,
-            "spy_ma200": ma200 if not spy_history.empty else None
+            "spy_price": current_spy,
+            "spy_ema200": ema200,
+            "vix": current_vix
         }
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
-        # 8. Notify (Maintenant awaitable)
+        # 9. Notify
         await notify(top_10_stocks, top_5_etfs)
 
-        # 9. Console Summary
         if not top_10_stocks.empty:
             logger.info("TOP 5 STOCKS IDENTIFIED:")
             for _, row in top_10_stocks.head(5).iterrows():
-                logger.info(f"- {row['symbol']} (Score: {int(row['score_global'])}/100) | Q:{int(row['score_quality'])} V:{int(row['score_valuation'])} M:{int(row['score_momentum'])}")
+                logger.info(f"- {row['symbol']} (Score: {int(row['score_global'])}/100)")
 
         logger.info("Scan quotidien terminé avec succès.")
     except Exception as e:
@@ -120,28 +126,34 @@ async def main():
         if args.now:
             return
 
-    logger.info("Démarrage du ValueMomentum Scanner (AsyncIOScheduler)...")
+    logger.info("Démarrage du ValueMomentum Scanner (APScheduler 4.x Async Native)...")
 
-    scheduler = AsyncIOScheduler()
-    tz = timezone("America/New_York")
+    # APScheduler 4.x : AsyncScheduler est le point d'entrée direct
+    async with AsyncScheduler() as scheduler:
+        tz = timezone("America/New_York")
+        
+        # Configuration du trigger Cron
+        trigger = CronTrigger(
+            day_of_week="mon-fri",
+            hour=9,
+            minute=35,
+            timezone=tz
+        )
 
-    scheduler.add_job(
-        run_scanner,
-        "cron",
-        day_of_week="mon-fri",
-        hour=9,
-        minute=35,
-        timezone=tz
-    )
+        # Ajout de l'horaire (schedule)
+        await scheduler.add_schedule(
+            run_scanner,
+            trigger=trigger,
+            id="daily_scan"
+        )
 
-    logger.info("Scheduler configuré pour 09:35 ET, du lundi au vendredi.")
-    scheduler.start()
-
-    try:
-        while True:
-            await asyncio.sleep(1000)
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Arrêt du scheduler.")
+        logger.info("Scheduler configuré pour 09:35 ET, du lundi au vendredi.")
+        
+        # Lancer le scheduler
+        await scheduler.run_until_stopped()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass

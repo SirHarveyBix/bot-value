@@ -143,8 +143,8 @@ Accès : `http://localhost:8080/web/`
 
 ## 📂 Structure des fichiers
 
-- `scanner/` : Moteur de scoring et fetcher.
-- `data/universe/` : Listes de tickers.
-- `data/signals/` : Historique des scans (JSON).
-- `data/cache/` : Cache yfinance.
-- `web/` : Interface HTML.
+- `scanner/` : Moteur de scoring, fetcher asynchrone et orchestrateur APScheduler 4.x.
+- `data/universe/` : Listes de tickers (Master List).
+- `data/signals/` : Base de données SQLite (`scanner_history.db`) contenant l'historique complet.
+- `data/cache/` : Cache persistant pour les données fondamentales.
+- `web/` : Interface HTML (Viewer statique v1.0).
