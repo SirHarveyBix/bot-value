@@ -1,0 +1,12 @@
+[tool.ruff]
+# Configuration de base pour Ruff
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# Activer les règles de base (E, F) + Ishort (I) + Bugbear (B)
+select = ["E", "F", "I", "B", "W"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["scanner"]

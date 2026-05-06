@@ -1,8 +1,9 @@
 import json
 import os
-import time
 from datetime import datetime, timedelta
+
 from scanner.config import logger
+
 
 class CacheManager:
     def __init__(self, cache_dir="data/cache"):
@@ -22,11 +23,11 @@ class CacheManager:
         try:
             with open(path, 'r') as f:
                 entry = json.load(f)
-            
+
             fetched_at = datetime.fromisoformat(entry["fetched_at"])
             if datetime.now() - fetched_at > timedelta(seconds=ttl_seconds):
                 return None
-            
+
             return entry["data"]
         except Exception as e:
             logger.error(f"Erreur lecture cache {category}:{key} - {e}")

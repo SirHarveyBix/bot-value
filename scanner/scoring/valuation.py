@@ -1,4 +1,5 @@
-from scanner.config import CONFIG, logger
+from scanner.config import logger
+
 
 def calculate_valuation_metrics(ticker_info):
     """
@@ -10,7 +11,8 @@ def calculate_valuation_metrics(ticker_info):
         ev_ebitda = ticker_info.get("enterpriseToEbitda")
         peg = ticker_info.get("pegRatio")
         sector = ticker_info.get("sector")
-        
+        mcap = ticker_info.get("marketCap", 0)
+
         # Fallback P/E
         pe_used = pe_fwd
         pe_flag = None
@@ -18,12 +20,13 @@ def calculate_valuation_metrics(ticker_info):
             if pe_ttm and pe_ttm > 0:
                 pe_used = pe_ttm
                 pe_flag = "P/E TTM used as fallback"
-        
+
         return {
             "pe": pe_used,
             "ev_ebitda": ev_ebitda,
             "peg": peg,
             "sector": sector,
+            "mcap": mcap,
             "pe_flag": pe_flag
         }
     except Exception as e:
@@ -37,19 +40,26 @@ def apply_valuation_gates(metrics):
     pe = metrics.get("pe")
     ev_ebitda = metrics.get("ev_ebitda")
     sector = metrics.get("sector")
-    
-    if pe is None or pe <= 0:
-        return False, "P/E manquant ou négatif"
-        
-    # Seuil P/E par secteur
+    mcap = metrics.get("mcap", 0)
+
+    # Section 4.4: Exception Health Care < 5B$ (Biotechs)
+    # On suspend le gate P/E négatif
+    is_biotech_exception = sector == "Health Care" and mcap < 5_000_000_000
+
+    if not is_biotech_exception:
+        if pe is None or pe <= 0:
+            return False, "P/E manquant ou négatif"
+
+    # Seuil P/E par secteur (Section 4.1)
     pe_limit = 50
     if sector in ["Technology", "Health Care"]:
         pe_limit = 80
-        
-    if pe > pe_limit:
+
+    if pe is not None and pe > pe_limit:
         return False, f"P/E trop élevé: {pe:.1f} (limit {pe_limit})"
-        
+
     if ev_ebitda and ev_ebitda > 40:
         return False, f"EV/EBITDA trop élevé: {ev_ebitda:.1f}"
-        
+
     return True, None
+

@@ -1,8 +1,10 @@
 import time
-import yfinance as yf
+
 import pandas as pd
-from scanner.config import CONFIG, logger
+import yfinance as yf
+
 from scanner.cache import cache
+from scanner.config import logger
 
 # TTL en secondes
 TTL_FUNDAMENTALS = 24 * 3600
@@ -55,7 +57,7 @@ def fetch_ticker_info(ticker_symbol):
                 logger.warning(f"Données incomplètes pour {ticker_symbol} (tentative {attempt+1})")
         except Exception as e:
             logger.warning(f"Erreur fetch {ticker_symbol} (tentative {attempt+1}): {e}")
-        
+
         if attempt < max_retries - 1:
             time.sleep(2 * (attempt + 1)) # Backoff exponentiel simple
 
@@ -68,18 +70,18 @@ def fetch_all_data(tickers, etfs=None):
     """
     if etfs is None:
         etfs = []
-        
+
     all_tickers = list(set(tickers + etfs + SECTOR_ETFS))
     results = {}
-    
+
     # 1. Fetch prix en batch
     prices_batch = fetch_prices_batch(all_tickers)
-    
+
     # 2. Fetch info individuelles (uniquement pour les stocks)
     for symbol in tickers + etfs:
         logger.debug(f"Récupération des données pour {symbol}...")
         info = fetch_ticker_info(symbol) if symbol in tickers else {}
-        
+
         # Extraire les prix du batch
         prices = None
         if isinstance(prices_batch.columns, pd.MultiIndex):
@@ -88,15 +90,15 @@ def fetch_all_data(tickers, etfs=None):
         else:
             if symbol == prices_batch.name if hasattr(prices_batch, 'name') else False:
                 prices = prices_batch
-            
+
         results[symbol] = {
             "info": info,
             "prices": prices
         }
-        
+
     # Ajouter les prix des sector ETFs au dictionnaire de résultats
     for s_etf in SECTOR_ETFS:
         if isinstance(prices_batch.columns, pd.MultiIndex) and s_etf in prices_batch.columns.levels[0]:
             results[s_etf] = {"prices": prices_batch[s_etf]}
-        
+
     return results
