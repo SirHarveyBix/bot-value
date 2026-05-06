@@ -9,7 +9,7 @@ Ce document définit les rôles et les responsabilités de l'équipe travaillant
 **Mission :** Garantir que le bot répond aux besoins métier et respecte les spécifications.
 
 - Valide la conformité des fonctionnalités avec l'architecture en Entonnoir (Section 2 des specs).
-- Priorise les évolutions vers des API officielles (v2.0).
+- Supervise la qualité des données via l'API FMP (Sniper).
 - S'assure que les ratios de données (Chalutier & Sniper) sont respectés.
 
 ## 📈 Trader Expert ValueMomentum
@@ -32,7 +32,7 @@ Ce document définit les rôles et les responsabilités de l'équipe travaillant
 
 **Mission :** Implémentation de haute qualité et optimisation.
 
-- **Dév Senior 1 (Performance/Data)** : Focus sur le cache et l'optimisation du batch download.
+- **Dév Senior 1 (Performance/Data)** : Focus sur l'intégration de l'API FMP pour le Sniper et l'optimisation du batch download yfinance.
 - **Dév Senior 2 (Algorithmes)** : Focus sur le scoring asymétrique (Momentum technique vs Qualité fondamentale).
 - **Dév Senior 3 (Système/Ops)** : Focus sur la résilience du scheduler et le déploiement PM2.
 

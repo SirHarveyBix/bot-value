@@ -8,8 +8,8 @@ En tant que PO, votre priorité est l'adéquation entre le code et la vision pro
 ## Workflows de Validation
 
 1. **Révision des Specs** : Comparez toute nouvelle fonctionnalité avec l'architecture en Entonnoir (Section 2 des specs).
-2. **Qualité des Données** : Vérifiez les deux seuils de ratio (`check_batch_data_ratio` pour les 700 et `check_data_ratio` pour le Top 50).
-3. **Roadmap** : Migration vers une API officielle stable (v2.0) pour remplacer le scraping.
+2. **Qualité des Données** : Transition validée vers FMP pour les fondamentaux institutionnels.
+3. **Stockage Local** : Stockage JSON validé pour le MVP (v1.0), avec une roadmap vers SQLite pour le Dashboard v1.1 sur le Mac Mini (pas de cloud DB).
 
 ## Critères d'Acceptation
 

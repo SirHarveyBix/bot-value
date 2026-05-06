@@ -1,4 +1,5 @@
 import time
+import requests
 
 import pandas as pd
 import yfinance as yf
@@ -14,8 +15,7 @@ SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "
 
 def fetch_prices_batch(tickers, period="1y"):
     """
-    Télécharge les prix historiques pour une liste de tickers.
-    Utilise yfinance download pour le batching.
+    Télécharge les prix historiques pour une liste de tickers via yfinance.
     """
     if not tickers:
         return pd.DataFrame()
@@ -34,39 +34,95 @@ def fetch_prices_batch(tickers, period="1y"):
         logger.error(f"Erreur lors du batch download: {e}")
         return pd.DataFrame()
 
+def fetch_fmp_data(symbol):
+    """
+    Récupère les fondamentaux institutionnels via Financial Modeling Prep.
+    """
+    api_key = CONFIG["scanner"].get("fmp_api_key")
+    base_url = CONFIG["scanner"].get("fmp_base_url")
+
+    if not api_key or api_key.startswith("${"):
+        logger.warning(f"Clé FMP manquante. Repli sur yfinance pour {symbol}.")
+        return None
+
+    # On a besoin de : Quote, Ratios-TTM, Key-Metrics-TTM
+    # Pour minimiser les appels sur plan gratuit (250/jour), on cible l'essentiel
+    try:
+        # 1. Ratios TTM (ROE, Marges, P/E, PEG)
+        r_resp = requests.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}")
+        # 2. Key Metrics TTM (Net Debt / EBITDA, Market Cap)
+        k_resp = requests.get(f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}")
+        # 3. Profile (Sector, Industry, Name)
+        p_resp = requests.get(f"{base_url}/profile/{symbol}?apikey={api_key}")
+
+        if r_resp.status_code == 200 and k_resp.status_code == 200 and p_resp.status_code == 200:
+            r_data = r_resp.json()
+            k_data = k_resp.json()
+            p_data = p_resp.json()
+
+            if r_data and k_data and p_data:
+                # Normalisation vers un format compatible avec le scoring
+                r = r_data[0]
+                k = k_data[0]
+                p = p_data[0]
+                
+                return {
+                    "symbol": symbol,
+                    "longName": p.get("companyName"),
+                    "sector": p.get("sector"),
+                    "marketCap": p.get("mktCap"),
+                    "returnOnEquity": r.get("returnOnEquityTTM"),
+                    "operatingMargins": r.get("operatingProfitMarginTTM"),
+                    "totalDebt": k.get("totalDebtTTM"),
+                    "totalCash": k.get("netDebtTTM"), # On va tricher un peu car on a directement netDebt
+                    "netDebt": k.get("netDebtTTM"),
+                    "ebitda": k.get("ebitdaTTM"),
+                    "freeCashflow": k.get("freeCashFlowTTM"),
+                    "forwardPE": r.get("priceEarningsRatioTTM"), # FMP ratios are TTM, used as proxy for Forward
+                    "enterpriseToEbitda": r.get("enterpriseValueOverEBITDATTM"),
+                    "pegRatio": r.get("pegRatioTTM"),
+                    "revenueGrowth": r.get("revenueGrowthTTM"),
+                    "source": "FMP"
+                }
+        return None
+    except Exception as e:
+        logger.error(f"Erreur API FMP pour {symbol}: {e}")
+        return None
+
 def fetch_ticker_info(ticker_symbol):
     """
-    Récupère les informations (.info) d'un ticker avec cache et retry.
+    Récupère les informations d'un ticker avec cache, en priorité via FMP puis yfinance.
     """
     # 1. Vérifier le cache
     cached_data = cache.get("fundamentals", ticker_symbol, TTL_FUNDAMENTALS)
     if cached_data:
         return cached_data
 
-    # 2. Fetch yfinance avec retry
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            ticker = yf.Ticker(ticker_symbol)
-            info = ticker.info
-            if info and (info.get("currentPrice") or info.get("regularMarketPrice")):
-                # Sauvegarder dans le cache
-                cache.set("fundamentals", ticker_symbol, info)
-                return info
-            else:
-                logger.warning(f"Données incomplètes pour {ticker_symbol} (tentative {attempt+1})")
-        except Exception as e:
-            logger.warning(f"Erreur fetch {ticker_symbol} (tentative {attempt+1}): {e}")
+    # 2. Priorité FMP (Sniper)
+    info = fetch_fmp_data(ticker_symbol)
+    
+    # 3. Fallback yfinance si FMP échoue ou absent
+    if not info:
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                ticker = yf.Ticker(ticker_symbol)
+                info = ticker.info
+                if info and (info.get("currentPrice") or info.get("regularMarketPrice")):
+                    info["source"] = "yfinance"
+                    break
+            except Exception as e:
+                logger.warning(f"Erreur fallback yfinance {ticker_symbol}: {e}")
+                time.sleep(1)
 
-        if attempt < max_retries - 1:
-            time.sleep(2 * (attempt + 1)) # Backoff exponentiel simple
-
-    return None
+    if info:
+        cache.set("fundamentals", ticker_symbol, info)
+    return info
 
 def fetch_all_data(tickers, etfs=None, prices_batch=None):
     """
     Orchestre la récupération de toutes les données pour une shortlist de tickers.
-    Le Sniper : Focus sur la qualité pour un nombre réduit d'actions.
+    Le Sniper : Utilise FMP pour la shortlist.
     """
     if etfs is None:
         etfs = []
@@ -74,20 +130,17 @@ def fetch_all_data(tickers, etfs=None, prices_batch=None):
     all_tickers = list(set(tickers + etfs + SECTOR_ETFS))
     results = {}
 
-    # 1. Fetch prix en batch si non fourni
     if prices_batch is None:
         prices_batch = fetch_prices_batch(all_tickers)
 
-    # 2. Fetch info individuelles (Sniper stage - uniquement sur la shortlist)
-    delay = CONFIG["scanner"].get("inter_request_delay", 1.0) # Délai plus long pour le Sniper
+    delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
     for i, symbol in enumerate(tickers):
         if i > 0 and delay > 0:
             time.sleep(delay)
             
-        logger.debug(f"Sniper : Récupération des fondamentaux pour {symbol}...")
+        logger.info(f"Sniper : Récupération des fondamentaux pour {symbol}...")
         info = fetch_ticker_info(symbol)
 
-        # Extraire les prix
         prices = None
         if isinstance(prices_batch.columns, pd.MultiIndex):
             if symbol in prices_batch.columns.levels[0]:
@@ -98,7 +151,6 @@ def fetch_all_data(tickers, etfs=None, prices_batch=None):
             "prices": prices
         }
 
-    # Ajouter les prix pour les ETFs et Sector ETFs
     for s_etf in list(set(etfs + SECTOR_ETFS)):
         prices = None
         if isinstance(prices_batch.columns, pd.MultiIndex):
@@ -106,8 +158,9 @@ def fetch_all_data(tickers, etfs=None, prices_batch=None):
                 prices = prices_batch[s_etf]
         
         results[s_etf] = {
-            "info": {}, # Pas de fondamentaux pour les ETFs dans cette étape
+            "info": {},
             "prices": prices
         }
 
     return results
+

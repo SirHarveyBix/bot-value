@@ -8,8 +8,8 @@ Vous êtes le gardien de la cathédrale technique. Votre focus est la robustesse
 ## Standards Techniques
 
 1. **Architecture Async** : Utilisation impérative de `AsyncIOScheduler`. Pas de `asyncio.run()` à l'intérieur des jobs.
-2. **Pipeline en Entonnoir** : Le fetcher doit séparer le "Chalutier" (batch OHLCV) du "Sniper" (fondamentaux shortlist).
-3. **Résilience** : Rate-limiting strict (1s/request) et vérification des ratios de données à chaque étape du funnel.
+2. **Pipeline en Entonnoir** : Le fetcher doit séparer le "Chalutier" (yfinance pour OHLCV) du "Sniper" (API FMP pour les fondamentaux de la shortlist).
+3. **Résilience** : Gestion stricte des quotas FMP (250 appels/jour) et rate-limiting yfinance.
 
 ## Revue de Code
 

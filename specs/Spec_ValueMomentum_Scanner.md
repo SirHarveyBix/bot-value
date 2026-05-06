@@ -290,10 +290,10 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 
 **Score Qualité** = moyenne pondérée des 4 percentile rangs
 
-- ROE 3 ans : 35%
-- Marge opérationnelle : 30%
-- FCF Yield proxy : 25%
-- Dette/EBITDA (inversé — plus c'est bas, mieux c'est) : 10%
+- ROE (TTM) : 40%
+- Marge opérationnelle : 35%
+- FCF Yield proxy : 15%
+- Dette/EBITDA (inversé) : 10%
 
 ---
 
@@ -338,7 +338,7 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 
 > **Définition Prix J0** : close du dernier jour de bourse disponible avant le déclenchement du scan (= close J-1). À 09h30 ET, le marché vient d'ouvrir — les prix intraday ne sont pas utilisés. `yf.download(ticker, period="1d")["Close"].iloc[-1]` du jour précédent.
 
-> **Honnêteté sur le Momentum Fondamental** : En l'absence de données de révision de consensus (donnée forward-looking payante), nous utilisons la croissance du chiffre d'affaires TTM. C'est un indicateur **rétrospectif** (backward-looking). Il ne prédit pas le futur mais confirme que la tendance de prix actuelle est soutenue par une croissance réelle constatée. En v2, intégrer une API de consensus (Financial Modeling Prep) pour un vrai signal de révision.
+> **Honnêteté sur le Momentum Fondamental** : En l'absence de données de révision de consensus (donnée forward-looking payante) au niveau du screening global, nous utilisons la croissance du chiffre d'affaires TTM. C'est un indicateur **rétrospectif** (backward-looking). Pour pallier cela, le système utilise l'API FMP à l'étape 2 (Sniper) pour valider la traction fondamentale avec des données institutionnelles.
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
 
@@ -400,15 +400,14 @@ score_global = (
 
 ### 4.3 Pipeline ETFs (score simplifié)
 
-Pour les ETFs, seuls 3 critères sont calculés :
+Pour les ETFs, le scoring est purement asymétrique et se concentre sur l'action des prix, excluant le volume (potentiellement toxique en cas de panique) :
 
 | Critère             | Calcul                                             | Pondération |
 | ------------------- | -------------------------------------------------- | ----------- |
-| Performance 6 mois  | (Prix J0 - Prix J-126) / Prix J-126                | 40%         |
-| Surperf vs SPY 6M   | Perf 6M ETF - Perf 6M SPY                          | 35%         |
-| Volume trend 3 mois | (vol*moy_20j - vol_moy_J-63*à_J-43) / vol_moy_hist | 25%         |
+| Performance 6 mois  | (Prix J0 - Prix J-126) / Prix J-126                | 50%         |
+| Surperf vs SPY 6M   | Perf 6M ETF - Perf 6M SPY                          | 50%         |
 
-> **Note AUM trend** : L'AUM réel n'est pas disponible via yfinance. Proxy v1 = variation du volume moyen 20j vs volume moyen 20j centré sur J-63 (3 mois passés). Ce proxy est bruité (volatilité augmente aussi le volume). Sa pondération est réduite à 25% pour limiter l'impact. En v2, intégrer VettaFi ou ETF.com pour AUM réel.
+> **Note Volume** : Le critère de volume a été supprimé. Une hausse de volume sur un ETF peut signifier une panique vendeuse (liquidation). Le scoring se concentre sur la surperformance relative et le momentum lissé.
 
 ### 4.4 Traitement spécifique des secteurs atypiques
 
@@ -570,7 +569,7 @@ def escape_html(text: str) -> str:
 
 ### 6.6 Rate limiting Telegram
 
-Telegram limite les messages à **1 message/seconde** pour un même chat. Le top 10 génère potentiellement 10+ messages.
+Telegram limite les messages à **1 message/seconde** pour un même chat. Le top 10 génère potentiellement 15+ messages (Actions + ETFs).
 
 ```python
 import asyncio
@@ -578,16 +577,19 @@ import asyncio
 async def send_signals(tickers: list):
     for ticker_data in tickers:
         await bot.send_message(chat_id=CHAT_ID, text=format_message(ticker_data), parse_mode="HTML")
-        await asyncio.sleep(1.1)  # légèrement au-dessus de 1s pour marge
+        await asyncio.sleep(1.5)  # Délai de sécurité asymétrique pour éviter HTTP 429
 ```
 
 > **Architecture async** : `python-telegram-bot==21.x` est async-first (asyncio). Le scheduler APScheduler 3.x est synchrone — utiliser `asyncio.run()` pour exécuter les coroutines Telegram depuis le job scheduler. Alternativement, migrer vers APScheduler 4.x (natif async) en v1.1.
 
 ---
 
-## 7. Module 6 — Storage & History
+## 7. Module 6 — Storage & History (v1.0 JSON / v1.1 SQLite)
 
-### 7.1 Structure fichiers JSON
+### 7.1 Stratégie de stockage
+En v1.0 (MVP), le stockage repose sur des fichiers JSON plats pour une simplicité maximale de déploiement. La migration vers **SQLite** est prévue en v1.1 pour supporter l'interface web dynamique et les requêtes analytiques.
+
+### 7.2 Structure fichiers JSON (v1.0)
 
 ```
 data/
@@ -663,26 +665,14 @@ data/
 
 ---
 
-## 8. Interface HTML (option v1.1)
+## 8. Interface HTML (v1.0 Statique / v1.1 Dynamique)
 
-Une page HTML statique générée quotidiennement depuis le JSON, consultable via navigateur sur le réseau local.
+### 8.1 Approche v1.0
+Une page HTML statique générée quotidiennement depuis le JSON `signals_latest.json`.
+- **Stack** : Vanilla JS + http.server.
 
-### 8.1 Fonctionnalités minimales
-
-- Tableau des top 10 avec tri par colonne (score global, qualité, valorisation, momentum)
-- Filtrage par secteur
-- Historique des 30 derniers jours (graphique de score pour les tickers récurrents)
-- Accessible via `http://mac-mini.local:8080/` sur le réseau local
-
-### 8.2 Stack technique
-
-```
-- Fichier index.html unique (pas de build step, pas de framework)
-- Vanilla JavaScript
-- Chart.js pour les graphiques (CDN)
-- Données chargées depuis signals_latest.json (fetch local)
-- Serveur HTTP : python -m http.server 8080 (lancé par PM2)
-```
+### 8.2 Transition v1.1 (Roadmap)
+Migration vers une API **FastAPI** interrogeant la base **SQLite** locale pour un dashboard interactif.
 
 ---
 
@@ -927,25 +917,19 @@ L'utilisation de `yfinance` présente un risque structurel car il s'agit d'un wr
 
 ### 14.1 Tests unitaires obligatoires avant déploiement
 
-```
-tests/test_scoring.py
-├── test_quality_score_calculation()        # Vérifier pondérations
-├── test_valuation_intra_sector_ranking()   # Ranking intra-secteur correct
-├── test_momentum_sector_outperformance()   # Delta vs ETF sectoriel
-├── test_score_global_bounds()              # Score toujours entre 0 et 100
-├── test_gate_negative_roe_exclusion()      # Les ROE négatifs sont exclus
-└── test_high_debt_exclusion()              # Les bilans dangereux sont exclus
+Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
 
-tests/test_fetcher.py
-├── test_cache_hit()                        # Cache fonctionne
-├── test_retry_on_failure()                 # Retry logic opérationnelle
-└── test_data_freshness_flag()             # Données > 120j flaggées
+**Logic & Scoring (`tests/test_logic.py`) :**
+- `test_quality_logic()` : Vérifie le calcul du ROE, Dette/EBITDA (avec fallback FMP/yfinance) et les gates d'exclusion.
+- `test_valuation_logic()` : Vérifie les limites de P/E par secteur (80 pour Tech/Health, 50 ailleurs).
+- `test_momentum_logic()` : Vérifie le calcul des performances 3M/6M et le proxy de croissance CA.
+- `test_momentum_penalties()` : Valide les pénalités anti-momentum extrême (>25% ou <-20% sur 1 mois).
+- `test_etf_pipeline()` : Valide le nouveau scoring 50/50 Pur Prix (sans volume).
+- `test_sector_diversification()` : Vérifie que le Top 10 ne contient pas plus de 3 tickers du même secteur.
+- `test_sector_exceptions()` : Valide les exceptions pour les Financials (dette) et Biotechs (P/E).
 
-tests/test_filters.py
-├── test_earnings_calendar_tag()           # Earnings proches = tag ajouté
-├── test_sector_diversification()          # Max 3 par secteur dans top 10
-└── test_minimum_data_ratio()             # Block si <60% données valides
-```
+**Intégration & Fetcher (`tests/test_scoring_engine.py`) :**
+- `test_scoring()` : Test de bout en bout récupérant des données réelles (yfinance/FMP) pour valider le pipeline complet.
 
 ---
 
@@ -954,36 +938,30 @@ tests/test_filters.py
 ### v1.0 (scope actuel)
 
 - [x] Scanner quotidien Actions + ETFs
-- [x] Scoring 3 piliers
+- [x] Scoring 3 piliers (Qualité, Valorisation, Momentum)
+- [x] **Intégration API FMP** pour le Sniper (fondamentaux fiables)
 - [x] Alertes Telegram
 - [x] Stockage JSON
 
 ### v1.1
 
 - [ ] Interface HTML viewer
+- [ ] Migration vers **SQLite** pour le stockage historique
 - [ ] Historique de performance des signaux (track record)
-- [ ] Backtesting simple sur 1 an de signaux historiques
-
-### v2.0
-
-- [ ] Intégration données alternatives (insiders transactions, short interest)
-- [ ] Alertes prix en temps réel sur les tickers signalés (suivi de la position)
-- [ ] Score de sentiment news (via API NewsAPI ou Finviz)
-- [ ] Support multi-marchés (ETFs Europe via IBKR)
 
 ---
 
 ## 16. Contraintes et hypothèses de développement
 
-1. **yfinance est la seule source de données** — pas d'API payante en v1. Les limitations de yfinance (données manquantes, délais, instabilité) doivent être gérées par le code, pas par un changement de source.
+1. **Hybride yfinance / FMP** : yfinance est utilisé pour le volume (prix OHLCV) et FMP pour la précision (fondamentaux shortlist). Le bot doit pouvoir fonctionner avec yfinance seul si la clé FMP est absente (fallback).
 
-2. **Le Mac Mini est en local** — pas de cloud. La disponibilité dépend de la connexion domestique. Le bot tolère une indisponibilité de 24h (le scan du lendemain suffira).
+2. **Le Mac Mini est en local** — pas de cloud. Le stockage reste local (JSON puis SQLite).
 
-3. **Aucun ordre n'est exécuté** — ce système est un scanner de décision. L'humain décide d'acheter ou non. Pas de connexion IBKR, pas de gestion de portefeuille automatique.
+3. **Aucun ordre n'est exécuté** — ce système est un scanner de décision.
 
-4. **Pas de machine learning en v1** — scoring purement quantitatif et déterministe. Reproductible et debuggable facilement.
+4. **Focus Prix pour les ETFs** : Le volume est exclu du scoring ETF pour éviter les faux signaux de panique/liquidation.
 
-5. **Univers limité aux actions US** — pas d'actions européennes ou asiatiques en v1 (yfinance est moins fiable sur ces marchés pour les fondamentaux).
+5. **Univers limité aux actions US** — focus initial sur la fiabilité des données.
 
 ---
 

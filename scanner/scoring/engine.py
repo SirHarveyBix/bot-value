@@ -156,7 +156,7 @@ def stock_scoring_pipeline(all_data, symbols):
     return df.sort_values("score_global", ascending=False)
 
 def etf_scoring_pipeline(all_data, etfs):
-    """Pipeline de scoring simplifié pour les ETFs."""
+    """Pipeline de scoring simplifié pour les ETFs (Pur Prix)."""
     rows = []
     spy_data = all_data.get("SPY", {}).get("prices")
 
@@ -177,16 +177,10 @@ def etf_scoring_pipeline(all_data, etfs):
             spy_perf = (spy_data["Close"].iloc[-1] - spy_data["Close"].iloc[-126]) / spy_data["Close"].iloc[-126]
             outperf_spy = perf_6m - spy_perf
 
-        # Volume trend
-        vol_moy_20j = prices["Volume"].iloc[-20:].mean()
-        vol_moy_hist = prices["Volume"].iloc[-63:-43].mean() if len(prices) >= 63 else vol_moy_20j
-        vol_trend = (vol_moy_20j - vol_moy_hist) / vol_moy_hist if vol_moy_hist > 0 else 0
-
         rows.append({
             "symbol": symbol,
             "perf_6m": perf_6m,
-            "outperf_spy": outperf_spy,
-            "vol_trend": vol_trend
+            "outperf_spy": outperf_spy
         })
 
     if not rows:
@@ -195,10 +189,9 @@ def etf_scoring_pipeline(all_data, etfs):
     df = pd.DataFrame(rows)
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
     df["rank_outperf_spy"] = compute_percentile_ranks(df, "outperf_spy")
-    df["rank_vol_trend"] = compute_percentile_ranks(df, "vol_trend")
 
-    df["score_global"] = (df["rank_perf_6m"].fillna(0) * 0.40 +
-                         df["rank_outperf_spy"].fillna(0) * 0.35 +
-                         df["rank_vol_trend"].fillna(0) * 0.25)
+    # Nouveau scoring 50/50 validé
+    df["score_global"] = (df["rank_perf_6m"].fillna(0) * 0.50 +
+                         df["rank_outperf_spy"].fillna(0) * 0.50)
 
     return df.sort_values("score_global", ascending=False)

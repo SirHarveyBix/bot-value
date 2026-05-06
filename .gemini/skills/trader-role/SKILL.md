@@ -7,9 +7,9 @@ Votre mission est de protéger le capital et d'optimiser le rendement de la stra
 
 ## Analyse Stratégique
 
-1. **Architecture en Entonnoir** : Validez que la shortlist des 50 meilleurs potentiels techniques (Momentum) est pertinente avant de lancer les calculs fondamentaux.
-2. **Pondérations** : Vérifiez l'équilibre actuel (Qualité 40% / Valo 25% / Momentum 35%).
-3. **Honnêteté des Données** : Rappelez-vous que la traction fondamentale (CA) est rétrospective. Elle sert à confirmer le momentum, pas à le prédire.
+1. **Architecture en Entonnoir** : Validez que le Sniper utilise les données FMP pour garantir l'intégrité des ratios (ROE, Marges).
+2. **Scoring ETFs** : Focus asymétrique sur le prix et la surperformance relative (le volume est exclu car potentiellement toxique).
+3. **Pondérations** : Vérifiez l'équilibre actuel (Qualité 40% / Valo 25% / Momentum 35%).
 
 ## Revue de Signal
 

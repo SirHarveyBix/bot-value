@@ -16,11 +16,16 @@ def calculate_quality_metrics(ticker_info):
 
         total_debt = ticker_info.get("totalDebt")
         total_cash = ticker_info.get("totalCash")
+        net_debt = ticker_info.get("netDebt") # FMP fournit souvent netDebt directement
         ebitda = ticker_info.get("ebitda")
 
         debt_ebitda = None
         if not exclude_debt:
-            if total_debt is not None and total_cash is not None and ebitda and ebitda > 0:
+            # Calcul via Net Debt direct (FMP)
+            if net_debt is not None and ebitda and ebitda > 0:
+                debt_ebitda = net_debt / ebitda
+            # Ou via Total Debt - Cash (yfinance)
+            elif total_debt is not None and total_cash is not None and ebitda and ebitda > 0:
                 debt_ebitda = (total_debt - total_cash) / ebitda
 
         # FCF Yield Proxy (Note: yfinance FCF data can be noisy/unreliable)

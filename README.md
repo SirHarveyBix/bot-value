@@ -25,7 +25,7 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 - **Fiabilité & Résilience** :
   - Architecture **Asynchrone** native (`AsyncIOScheduler`).
   - Rate limiting strict (1.0s delay) et contrôles de qualité de données à chaque étape.
-- **Scoring ETFs** : Performance 6M, surperformance vs SPY, Volume Trend.
+- **Scoring ETFs** : Performance 6M, surperformance relative vs SPY (Score Pur Prix).
 - **Orchestration** :
   - Scan automatique à 09h35 ET (NYSE).
   - Notifications Telegram (HTML).
@@ -49,15 +49,22 @@ pip install -r requirements.txt
 
 ## ⚙️ Configuration
 
-Le scanner utilise **yfinance**, qui ne nécessite **aucune clé d'API** pour les données de marché. Seules les informations Telegram sont requises.
+Le scanner utilise un pipeline hybride : **yfinance** (gratuit, sans clé) pour les données de prix massives, et **Financial Modeling Prep (FMP)** pour les fondamentaux institutionnels de la shortlist.
 
 ### 1. Créer le fichier .env
 
 Créez un fichier `.env` à la racine du projet en vous basant sur `.env.example`.
 
-### 2. Obtenir vos identifiants Telegram
+### 2. Obtenir vos identifiants
 
-#### A. Token du Bot (`TELEGRAM_BOT_TOKEN`)
+#### A. API Financial Modeling Prep (`FMP_API_KEY`)
+
+1. Créez un compte gratuit sur [Financial Modeling Prep](https://financialmodelingprep.com/developer/docs/).
+2. Récupérez votre clé API (le plan gratuit offre 250 appels/jour, suffisant pour le Sniper).
+
+#### B. Token du Bot Telegram (`TELEGRAM_BOT_TOKEN`)
+
+...
 
 1. Cherchez **@BotFather** sur Telegram.
 2. Envoyez la commande `/newbot`.
@@ -76,15 +83,20 @@ Créez un fichier `.env` à la racine du projet en vous basant sur `.env.example
 ```env
 TELEGRAM_BOT_TOKEN=votre_token_botfather
 TELEGRAM_CHAT_ID=votre_id_userinfobot
+FMP_API_KEY=votre_cle_fmp_gratuite
 ```
 
 ## 📈 Utilisation
 
-### Mode Automatique (Production)
+### Mode Automatique (Production - Recommandé)
+
+Pour garantir que le bot tourne 24/7 et redémarre en cas de crash ou de reboot du Mac Mini, utilisez **PM2** (voir Section 11 des Specs).
 
 ```bash
-source venv/bin/activate
-python3 main.py
+# Démarrage via PM2
+pm2 start ecosystem.config.js
+# Sauvegarder pour le reboot
+pm2 save
 ```
 
 ### Mode Manuel (Test immédiat)
