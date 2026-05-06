@@ -19,10 +19,12 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 
 ## 🚀 Fonctionnalités
 
-- **Scoring Actions (3 piliers)** :
-  - **Qualité** : ROE, Marges, Dette/EBITDA, FCF Yield.
-  - **Valorisation** : P/E Forward (intra-secteur), EV/EBITDA, PEG.
-  - **Momentum** : Performance 6M/3M, surperformance sectorielle relative.
+- **Pipeline en Entonnoir (Funnel)** :
+  - **Étape 1 (Chalutier)** : Screening technique massif (Momentum 3M/6M/Relatif) sur l'univers complet (~700 tickers).
+  - **Étape 2 (Sniper)** : Analyse fondamentale institutionnelle (Qualité/Valorisation) sur une shortlist de 50 finalistes.
+- **Fiabilité & Résilience** :
+  - Architecture **Asynchrone** native (`AsyncIOScheduler`).
+  - Rate limiting strict (1.0s delay) et contrôles de qualité de données à chaque étape.
 - **Scoring ETFs** : Performance 6M, surperformance vs SPY, Volume Trend.
 - **Orchestration** :
   - Scan automatique à 09h35 ET (NYSE).
@@ -47,11 +49,33 @@ pip install -r requirements.txt
 
 ## ⚙️ Configuration
 
-Créez un fichier `.env` à la racine :
+Le scanner utilise **yfinance**, qui ne nécessite **aucune clé d'API** pour les données de marché. Seules les informations Telegram sont requises.
+
+### 1. Créer le fichier .env
+
+Créez un fichier `.env` à la racine du projet en vous basant sur `.env.example`.
+
+### 2. Obtenir vos identifiants Telegram
+
+#### A. Token du Bot (`TELEGRAM_BOT_TOKEN`)
+
+1. Cherchez **@BotFather** sur Telegram.
+2. Envoyez la commande `/newbot`.
+3. Suivez les instructions (nom du bot, username).
+4. BotFather vous donnera un token (ex: `123456789:ABCDefgh...`). Copiez-le.
+
+#### B. Votre Chat ID (`TELEGRAM_CHAT_ID`)
+
+1. Cherchez **@userinfobot** sur Telegram.
+2. Envoyez-lui n'importe quel message.
+3. Il vous répondra avec votre `Id` (ex: `987654321`). Copiez-le.
+   - _Note : Si vous utilisez un Canal, ajoutez votre bot comme Admin du canal et utilisez des outils comme @getidsbot pour trouver l'ID du canal (commence souvent par -100)._
+
+### 3. Remplir le fichier .env
 
 ```env
-TELEGRAM_BOT_TOKEN=votre_token
-TELEGRAM_CHAT_ID=votre_chat_id
+TELEGRAM_BOT_TOKEN=votre_token_botfather
+TELEGRAM_CHAT_ID=votre_id_userinfobot
 ```
 
 ## 📈 Utilisation

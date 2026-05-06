@@ -98,6 +98,26 @@ def earnings_calendar_check(symbol):
         logger.debug(f"Erreur earnings calendar pour {symbol}: {e}")
         return None
 
+def check_batch_data_ratio(price_data, eligible_count):
+    """
+    Vérifie si le téléchargement par lot (Chalutier) a récupéré assez de données.
+    """
+    if eligible_count == 0:
+        return False
+
+    if isinstance(price_data.columns, pd.MultiIndex):
+        valid_count = len(price_data.columns.levels[0])
+    else:
+        valid_count = 1 if not price_data.empty else 0
+
+    ratio = valid_count / eligible_count
+    min_ratio = CONFIG["scanner"].get("min_valid_data_ratio", 0.60)
+    
+    if ratio < min_ratio:
+        logger.error(f"Ratio de prix batch trop faible: {ratio:.2%} (min {min_ratio:.0%})")
+        return False
+    return True
+
 def check_data_ratio(all_data, eligible_count):
     """
     Vérifie si on a assez de données valides pour produire un rapport.

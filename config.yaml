@@ -8,18 +8,20 @@ scanner:
   min_market_cap: 500000000
   min_volume_20j: 1000000
   min_price: 5.0
-  max_data_age_days: 110
+  max_data_age_days: 180
   min_valid_data_ratio: 0.60
+  inter_request_delay: 1.0
+  max_workers: 2
 
 scoring:
   weights:
-    quality: 0.35
-    valuation: 0.30
+    quality: 0.40
+    valuation: 0.25
     momentum: 0.35
   quality_subweights:
-    roe: 0.35
-    margin: 0.30
-    fcf_yield: 0.25
+    roe: 0.40
+    margin: 0.35
+    fcf_yield: 0.15
     debt_ebitda: 0.10
   valuation_subweights:
     pe_forward: 0.45
@@ -29,4 +31,4 @@ scoring:
     perf_6m: 0.30
     outperf_6m: 0.35
     perf_3m: 0.20
-    eps_revision: 0.15
+    sales_growth: 0.15

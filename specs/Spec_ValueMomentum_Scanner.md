@@ -60,8 +60,8 @@
 
 **VE :** Pour un horizon 3-6 mois, le momentum est le catalyseur immédiat. Mais sans qualité et valorisation, tu achètes juste ce qui a déjà monté. Ma suggestion de pondération :
 
-- Qualité : 35%
-- Valorisation : 30%
+- Qualité : 40%
+- Valorisation : 25%
 - Momentum : 35%
 
 C'est une pondération qui se rapproche de ce que font les facteurs "Quality Momentum" des grands fonds (AQR, Dimensional). On n'est pas dans le deep value pur Buffett — notre horizon 3-6 mois exige plus de momentum.
@@ -120,59 +120,23 @@ Langage          : Python 3.11+
 
 ---
 
-## 2. Architecture générale
+## 2. Architecture générale : L'Entonnoir (Funnel)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     SCHEDULER (APScheduler)                  │
-│                     Déclenchement 09h30 ET                   │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   MODULE 1 : UNIVERSE BUILDER                │
-│  Charge la liste de tickers → applique filtres d'éligibilité │
-│  Résultat : eligible_universe.json (~600-700 instruments)    │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                    ┌───────┴──────┐
-                    ▼              ▼
-┌─────────────────────┐  ┌─────────────────────┐
-│  PIPELINE ACTIONS   │  │  PIPELINE ETFs       │
-│  (scores complets)  │  │  (momentum + flux)   │
-└──────────┬──────────┘  └──────────┬───────────┘
-           │                        │
-           ▼                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│               MODULE 2 : DATA FETCHER                        │
-│  yfinance → price history, fundamentals, earnings calendar   │
-│  Gestion cache Redis/JSON, retry logic, data quality checks  │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│               MODULE 3 : SCORING ENGINE                      │
-│  Calcul des 3 piliers (Qualité / Valorisation / Momentum)    │
-│  Percentile ranking cross-universe et intra-secteur          │
-│  Score global pondéré 0-100                                  │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│               MODULE 4 : FILTER & RANKING                    │
-│  Élimination des données périmées                            │
-│  Tagging earnings calendar                                   │
-│  Ranking final → top 10 Actions + top 5 ETFs                │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                    ┌───────┴──────┐
-                    ▼              ▼
-┌─────────────────────┐  ┌─────────────────────────────────┐
-│  MODULE 5 : TELEGRAM │  │  MODULE 6 : STORAGE & HISTORY   │
-│  Formatage messages  │  │  signals_YYYY-MM-DD.json        │
-│  Envoi alertes bot   │  │  Interface HTML viewer           │
-└─────────────────────┘  └─────────────────────────────────┘
-```
+Pour maximiser l'univers tout en garantissant la qualité institutionnelle des signaux finaux sans coût d'API, le système adopte une architecture asymétrique :
+
+### Étape 1 : Le Chalutier (yfinance)
+- **Cible** : ~700 tickers.
+- **Action** : Batch download des prix historiques (OHLCV).
+- **Filtres** : Liquidité, Market Cap, Momentum (3M, 6M, Relatif).
+- **Sortie** : Une "Shortlist" des 50 meilleurs potentiels techniques.
+
+### Étape 2 : Le Sniper (API Officielle - ex: FMP)
+- **Cible** : Le Top 50 issu du Chalutier.
+- **Action** : Fetch des fondamentaux propres via API versionnée.
+- **Calcul** : Qualité (ROE, Marges, Dette/EBITDA) et Valorisation (P/E, PEG).
+- **Sortie** : Le Top 10 final envoyé sur Telegram.
+
+> **Bénéfice** : Cette méthode protège contre le rate-limiting de yfinance (car les appels `.info` sont limités à 50) et contre l'imprécision des données gratuites sur les actions que vous allez réellement acheter.
 
 ---
 
@@ -370,11 +334,11 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 | Performance 6 mois            | (Prix J0 - Prix J-126) / Prix J-126                       | Cross-universe |
 | Performance 3 mois            | (Prix J0 - Prix J-63) / Prix J-63                         | Cross-universe |
 | Surperformance sectorielle 6M | Perf 6M ticker - Perf 6M ETF sectoriel SPDR               | Intra-secteur  |
-| Momentum révision EPS (proxy) | `earningsGrowth` (TTM yfinance) — voir note disponibilité | Cross-universe |
+| Traction Fondamentale (proxy) | `revenueGrowth` (TTM yfinance) — croissance CA | Cross-universe |
 
 > **Définition Prix J0** : close du dernier jour de bourse disponible avant le déclenchement du scan (= close J-1). À 09h30 ET, le marché vient d'ouvrir — les prix intraday ne sont pas utilisés. `yf.download(ticker, period="1d")["Close"].iloc[-1]` du jour précédent.
 
-> **Note momentum révision EPS** : l'historique des révisions de consensus analyste sur 90 jours n'est pas disponible via yfinance (donnée payante Refinitiv/Zacks). En v1, proxy = `earningsGrowth` TTM (variation bénéfices YoY). Signal imparfait mais disponible. En v2, intégrer Zacks ou Financial Modeling Prep API (gratuit jusqu'à 250 req/jour) pour les vraies révisions de consensus.
+> **Honnêteté sur le Momentum Fondamental** : En l'absence de données de révision de consensus (donnée forward-looking payante), nous utilisons la croissance du chiffre d'affaires TTM. C'est un indicateur **rétrospectif** (backward-looking). Il ne prédit pas le futur mais confirme que la tendance de prix actuelle est soutenue par une croissance réelle constatée. En v2, intégrer une API de consensus (Financial Modeling Prep) pour un vrai signal de révision.
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
 
@@ -408,7 +372,7 @@ Les pénalités s'appliquent sur le **score momentum final** (après calcul de l
 - Perf 6 mois : 30%
 - Surperf sectorielle 6M : 35%
 - Perf 3 mois : 20%
-- Momentum révision EPS : 15%
+- Traction Fondamentale (CA) : 15%
 
 ---
 
@@ -796,15 +760,7 @@ pytest>=8.0.0
 pytest-asyncio>=0.23.0
 ```
 
-> **Note async** : `python-telegram-bot 21.x` est async. APScheduler 3.x est sync. Pattern d'intégration dans `main.py` :
->
-> ```python
-> def run_scan_job():
->     asyncio.run(scan_and_notify())  # asyncio.run() crée un event loop frais
-> scheduler.add_job(run_scan_job, "cron", hour=9, minute=30, timezone="America/New_York")
-> ```
->
-> Ne pas réutiliser un event loop entre jobs — `asyncio.run()` crée et ferme le sien à chaque appel.
+> **Note async** : `python-telegram-bot 21.x` est async. Nous utilisons `AsyncIOScheduler` (APScheduler 3.x) pour une intégration native. La boucle d'événement est gérée par `asyncio.run(main())` qui maintient le scheduler actif.
 
 ---
 
@@ -958,14 +914,12 @@ CACHE_TTL_FUNDAMENTALS = 24 * 3600   # 24 heures
 CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4 heures (prix intraday)
 ```
 
-### 13.3 Seuil minimum de données valides
+### 13.4 Fragilité du Scraping (yfinance)
 
-```python
-# Si moins de 60% des tickers de l'univers ont des données valides :
-# → Ne pas envoyer d'alerte Telegram avec des résultats partiels
-# → Envoyer un message d'erreur et logger le problème
-MIN_VALID_DATA_RATIO = 0.60
-```
+L'utilisation de `yfinance` présente un risque structurel car il s'agit d'un wrapper non-officiel. En cas de changement majeur de Yahoo Finance :
+1. **Surveillance** : Le bot logue tout échec de fetch. Si le ratio de données valides tombe sous 60%, le scan s'arrête.
+2. **Maintenance** : Une mise à jour régulière de la bibliothèque `yfinance` est nécessaire.
+3. **Roadmap v2** : Envisager la migration vers une API officielle (AlphaVantage, FMP) pour la stabilité long-terme.
 
 ---
 
@@ -1034,3 +988,4 @@ tests/test_filters.py
 ---
 
 _Document rédigé pour transmission à Claude (modèle de génération de code). Toutes les décisions d'architecture ont été prises pour maximiser la fiabilité des données et la maintenabilité du code, en tenant compte des contraintes de l'environnement Mac Mini local et des limites de l'API yfinance gratuite._
+_

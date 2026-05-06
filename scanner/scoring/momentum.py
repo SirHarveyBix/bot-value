@@ -40,15 +40,15 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
             if perf_6m is not None:
                 outperf_6m = perf_6m - s_perf_6m
 
-        # Momentum révision (proxy)
-        eps_growth = info.get("earningsGrowth")
+        # Sales Momentum (proxy de traction fondamentale)
+        sales_growth = info.get("revenueGrowth")
 
         return {
             "perf_6m": perf_6m,
             "perf_3m": perf_3m,
             "perf_1m": perf_1m,
             "outperf_6m": outperf_6m,
-            "eps_revision": eps_growth
+            "sales_growth": sales_growth
         }
     except Exception as e:
         logger.error(f"Erreur calcul momentum: {e}")

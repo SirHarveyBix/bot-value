@@ -23,12 +23,16 @@ def calculate_quality_metrics(ticker_info):
             if total_debt is not None and total_cash is not None and ebitda and ebitda > 0:
                 debt_ebitda = (total_debt - total_cash) / ebitda
 
-        # FCF Yield Proxy
+        # FCF Yield Proxy (Note: yfinance FCF data can be noisy/unreliable)
         fcf = ticker_info.get("freeCashflow")
         mcap = ticker_info.get("marketCap")
         fcf_yield = None
         if fcf is not None and mcap and mcap > 0:
             fcf_yield = fcf / mcap
+        elif ticker_info.get("operatingCashflow") and mcap and mcap > 0:
+            # Fallback sur l'Operating Cash Flow si le FCF est manquant
+            fcf_yield = ticker_info.get("operatingCashflow") / mcap
+            logger.debug(f"Utilisation de l'Operating Cashflow pour {ticker_info.get('symbol')} (FCF manquant)")
 
         return {
             "roe": roe,

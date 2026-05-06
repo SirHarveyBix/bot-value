@@ -2,7 +2,7 @@ import pandas as pd
 
 from scanner.filters import filter_post_scoring
 from scanner.scoring.engine import compute_percentile_ranks
-from scanner.scoring.momentum import apply_momentum_penalties
+from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
 
@@ -62,6 +62,17 @@ def test_valuation_logic():
     ok, reason = apply_valuation_gates(metrics)
     assert not ok
 
+def test_momentum_logic():
+    # Mock info for sales growth
+    info = {"revenueGrowth": 0.20}
+    # Mock prices (130 days of data)
+    prices = pd.DataFrame({
+        "Close": [100] * 130
+    })
+    metrics = calculate_momentum_metrics(prices, info)
+    assert metrics["sales_growth"] == 0.20
+    assert "perf_6m" in metrics
+
 def test_momentum_penalties():
     score = 80
     # Pénalité > 25%
@@ -108,8 +119,8 @@ def test_global_score_weights():
         "v_ok": True
     })
 
-    # Pondérations du config.yaml : 0.35, 0.30, 0.35
-    expected = 80 * 0.35 + 60 * 0.30 + 90 * 0.35 # 28 + 18 + 31.5 = 77.5
+    # Nouvelles pondérations du config.yaml : 0.40, 0.25, 0.35
+    expected = 80 * 0.40 + 60 * 0.25 + 90 * 0.35 # 32 + 15 + 31.5 = 78.5
 
     # On simule le calcul du main engine
     from scanner.config import CONFIG

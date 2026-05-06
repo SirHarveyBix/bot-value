@@ -4,7 +4,7 @@ import pandas as pd
 import yfinance as yf
 
 from scanner.cache import cache
-from scanner.config import logger
+from scanner.config import CONFIG, logger
 
 # TTL en secondes
 TTL_FUNDAMENTALS = 24 * 3600
@@ -63,10 +63,10 @@ def fetch_ticker_info(ticker_symbol):
 
     return None
 
-def fetch_all_data(tickers, etfs=None):
+def fetch_all_data(tickers, etfs=None, prices_batch=None):
     """
-    Orchestre la récupération de toutes les données pour une liste de tickers et d'ETFs.
-    Inclut les ETFs sectoriels pour les calculs de surperformance.
+    Orchestre la récupération de toutes les données pour une shortlist de tickers.
+    Le Sniper : Focus sur la qualité pour un nombre réduit d'actions.
     """
     if etfs is None:
         etfs = []
@@ -74,31 +74,40 @@ def fetch_all_data(tickers, etfs=None):
     all_tickers = list(set(tickers + etfs + SECTOR_ETFS))
     results = {}
 
-    # 1. Fetch prix en batch
-    prices_batch = fetch_prices_batch(all_tickers)
+    # 1. Fetch prix en batch si non fourni
+    if prices_batch is None:
+        prices_batch = fetch_prices_batch(all_tickers)
 
-    # 2. Fetch info individuelles (uniquement pour les stocks)
-    for symbol in tickers + etfs:
-        logger.debug(f"Récupération des données pour {symbol}...")
-        info = fetch_ticker_info(symbol) if symbol in tickers else {}
+    # 2. Fetch info individuelles (Sniper stage - uniquement sur la shortlist)
+    delay = CONFIG["scanner"].get("inter_request_delay", 1.0) # Délai plus long pour le Sniper
+    for i, symbol in enumerate(tickers):
+        if i > 0 and delay > 0:
+            time.sleep(delay)
+            
+        logger.debug(f"Sniper : Récupération des fondamentaux pour {symbol}...")
+        info = fetch_ticker_info(symbol)
 
-        # Extraire les prix du batch
+        # Extraire les prix
         prices = None
         if isinstance(prices_batch.columns, pd.MultiIndex):
             if symbol in prices_batch.columns.levels[0]:
                 prices = prices_batch[symbol]
-        else:
-            if symbol == prices_batch.name if hasattr(prices_batch, 'name') else False:
-                prices = prices_batch
-
+        
         results[symbol] = {
             "info": info,
             "prices": prices
         }
 
-    # Ajouter les prix des sector ETFs au dictionnaire de résultats
-    for s_etf in SECTOR_ETFS:
-        if isinstance(prices_batch.columns, pd.MultiIndex) and s_etf in prices_batch.columns.levels[0]:
-            results[s_etf] = {"prices": prices_batch[s_etf]}
+    # Ajouter les prix pour les ETFs et Sector ETFs
+    for s_etf in list(set(etfs + SECTOR_ETFS)):
+        prices = None
+        if isinstance(prices_batch.columns, pd.MultiIndex):
+            if s_etf in prices_batch.columns.levels[0]:
+                prices = prices_batch[s_etf]
+        
+        results[s_etf] = {
+            "info": {}, # Pas de fondamentaux pour les ETFs dans cette étape
+            "prices": prices
+        }
 
     return results

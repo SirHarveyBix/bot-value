@@ -33,15 +33,19 @@ async def send_telegram_signals(top_stocks, top_etfs):
 
     for i, (_, row) in enumerate(top_stocks.iterrows()):
         symbol = row["symbol"]
-        name = escape_html(row.get("symbol")) # En v1 on n'a pas forcément le longName ici
+        name = escape_html(row.get("name", symbol))
         score = int(row["score_global"])
 
         msg = f"#{i+1} 📈 <b>{name}</b> (${symbol})\n"
         msg += f"Score Global : {score}/100\n"
         msg += f"├ Qualité     : {int(row['score_quality'])}/100\n"
         msg += f"├ Valorisation: {int(row['score_valuation'])}/100\n"
-        msg += f"└ Momentum    : {int(row['score_momentum'])}/100\n"
-        msg += f"🏢 Secteur : {row.get('sector', 'Unknown')}\n"
+        msg += f"└ Momentum    : {int(row['score_momentum'])}/100\n\n"
+        
+        # Détails des métriques (Section 6.1)
+        msg += f"📈 Perf 6M : {row.get('perf_6m', 0):.1%} vs secteur {row.get('outperf_6m', 0):+.1%}\n"
+        msg += f"💰 P/E Fwd : {row.get('pe', 0):.1f} | ROE : {row.get('roe', 0):.1%}\n"
+        msg += f"🏢 {row.get('sector', 'Unknown')} | Cap : ${row.get('mcap_b', 0):.1f}B\n"
         
         # Ajout Earnings et Warnings
         if "earnings_date" in row and row["earnings_date"]:
@@ -73,8 +77,8 @@ async def send_telegram_signals(top_stocks, top_etfs):
     except Exception as e:
         logger.error(f"Erreur envoi Telegram: {e}")
 
-def notify(top_stocks, top_etfs):
-    """Wrapper synchrone pour appeler l'envoi async."""
+async def notify(top_stocks, top_etfs):
+    """Envoi des signaux via Telegram (Asynchrone)."""
     if top_stocks.empty and top_etfs.empty:
         return
-    asyncio.run(send_telegram_signals(top_stocks, top_etfs))
+    await send_telegram_signals(top_stocks, top_etfs)

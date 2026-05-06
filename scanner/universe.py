@@ -62,6 +62,12 @@ def _check_single_ticker(symbol):
         # Tenter de récupérer depuis le cache d'abord
         info = cache.get("fundamentals", symbol, TTL_FUNDAMENTALS)
         if not info:
+            # On ajoute un petit délai aléatoire ou fixe pour éviter de bombarder
+            import time
+            delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
+            if delay > 0:
+                time.sleep(delay)
+                
             ticker = yf.Ticker(symbol)
             info = ticker.info
             if info:

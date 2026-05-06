@@ -26,6 +26,39 @@ def compute_percentile_ranks(df, column, ascending=True):
         return pd.Series(index=df.index, data=np.nan)
     return df[column].rank(pct=True, ascending=ascending) * 100
 
+def momentum_screening_pipeline(price_data, symbols):
+    """Pipeline initial pour filtrer les tickers par momentum pur."""
+    rows = []
+    # Fetch SPY for relative performance benchmark
+    spy_prices = price_data["SPY"] if "SPY" in price_data.columns.levels[0] else None
+
+    for symbol in symbols:
+        # Extraire les prix du batch
+        prices = None
+        if isinstance(price_data.columns, pd.MultiIndex):
+            if symbol in price_data.columns.levels[0]:
+                prices = price_data[symbol]
+        
+        if prices is None or len(prices) < 126:
+            continue
+
+        # Calcul momentum simplifié (Section 4.1)
+        m_metrics = calculate_momentum_metrics(prices, {}, None) # Pas de secteur à ce stade
+        
+        rows.append({
+            "symbol": symbol,
+            "perf_6m": m_metrics.get("perf_6m", 0),
+            "perf_3m": m_metrics.get("perf_3m", 0)
+        })
+    
+    if not rows:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(rows)
+    # Score momentum rapide : 60% Perf 6M + 40% Perf 3M
+    df["m_score"] = df["perf_6m"] * 0.6 + df["perf_3m"] * 0.4
+    return df.sort_values("m_score", ascending=False)
+
 def stock_scoring_pipeline(all_data, symbols):
     """Pipeline de scoring pour les actions."""
     rows = []
@@ -55,7 +88,9 @@ def stock_scoring_pipeline(all_data, symbols):
 
         row = {
             "symbol": symbol,
+            "name": info.get("longName", symbol),
             "sector": sector,
+            "mcap_b": info.get("marketCap", 0) / 1e9 if info.get("marketCap") else 0,
             **q_metrics,
             **v_metrics,
             **m_metrics,
@@ -85,7 +120,7 @@ def stock_scoring_pipeline(all_data, symbols):
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
     df["rank_outperf_6m"] = compute_percentile_ranks(df, "outperf_6m")
     df["rank_perf_3m"] = compute_percentile_ranks(df, "perf_3m")
-    df["rank_eps_rev"] = compute_percentile_ranks(df, "eps_revision")
+    df["rank_sales_growth"] = compute_percentile_ranks(df, "sales_growth")
 
     # Scores
     qw = CONFIG["scoring"]["quality_subweights"]
@@ -103,7 +138,7 @@ def stock_scoring_pipeline(all_data, symbols):
         df["rank_perf_6m"].fillna(0) * mw["perf_6m"] +
         df["rank_outperf_6m"].fillna(0) * mw["outperf_6m"] +
         df["rank_perf_3m"].fillna(0) * mw["perf_3m"] +
-        df["rank_eps_rev"].fillna(0) * mw["eps_revision"]
+        df["rank_sales_growth"].fillna(0) * mw["sales_growth"]
     )
 
     df["score_momentum"] = df.apply(lambda r: apply_momentum_penalties(r["score_momentum"], r), axis=1)
