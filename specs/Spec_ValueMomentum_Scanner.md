@@ -178,15 +178,14 @@ Langage          : Python 3.11+
 
 ## 3. Module 1 — Universe Builder
 
-### 3.1 Univers de départ (fichier statique maintenu manuellement)
+### 3.1 Univers de départ (Master List & Refresh Automatique)
 
-```
-tickers_universe.json
-├── stocks: [liste S&P 500 + Russell 1000 complémentaires ~1200 tickers]
-└── etfs: [liste ~150 ETFs sectoriels, thématiques, smart beta]
-```
+L'univers est géré via un fichier JSON central (`tickers_universe.json`). Contrairement à la v1 initiale, le système supporte désormais le **rafraîchissement automatique** via `scanner/refresh_universe.py`.
 
-Le fichier sera mis à jour **manuellement une fois par mois** par l'opérateur (ajout des nouveaux entrants S&P, suppression des délistés). Ce n'est pas automatisé en v1 — les APIs de composition d'indices sont payantes et hors scope.
+- **S&P 500** : Import automatique depuis Wikipedia.
+- **Nasdaq 100** : Import automatique.
+- **Indices Mondiaux** : Support du NIFTY 50 (Inde) avec formatage `.NS`, et MSCI World.
+- **Mode Explorer** : Possibilité d'importer n'importe quel tableau Wikipedia via URL custom pour une découverte de marché dynamique (ex: CAC 40, DAX).
 
 ### 3.2 Filtres d'éligibilité obligatoires (appliqués chaque jour)
 
