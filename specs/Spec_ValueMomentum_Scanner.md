@@ -99,12 +99,20 @@ C'est une pondération qui se rapproche de ce que font les facteurs "Quality Mom
 ```
 Nom du projet    : ValueMomentum Scanner
 Version          : 1.0
-Horizon cible    : Signals pour positions 3 à 6 mois
+Horizon cible    : Position Trading (Hold) — 3 à 12 mois
+Type de stratégie : Swing Trading Long Terme / Investissement Quantitatif
 Fréquence        : Quotidienne (jours de bourse US uniquement)
 Déclenchement    : 09h30 ET (après ouverture NYSE)
 Sortie principale : Alertes Telegram + Base de données SQLite (`scanner_history.db`)
 Environnement    : Mac Mini (serveur local), macOS
 Langage          : Python 3.11+
+
+### Synthèse de l'Horizon de Trading
+
+Le bot est conçu pour le **Position Trading**. Contrairement à l'Intraday (scalping, day trading) ou au Swing Trading classique (quelques jours), cette stratégie vise à capturer des tendances de fond sur plusieurs **trimestres**. 
+- **Style** : "Buy and Hold" dynamique.
+- **Vecteur de temps** : On ne cherche pas le profit immédiat, mais la convergence de la Qualité fondamentale et du Momentum de prix.
+- **Rotation** : Le portefeuille est réévalué quotidiennement mais la rotation réelle des titres s'effectue généralement tous les 3 à 6 mois.
 ```
 
 > **Jours de bourse vs jours ouvrés** : APScheduler déclenche sur `cron` lundi-vendredi mais ignore les jours fériés NYSE (Thanksgiving, Christmas, MLK Day, etc.). Avant chaque scan, vérifier via `pandas_market_calendars` :
@@ -462,12 +470,12 @@ earnings_calendar_check():
 
 > **Note** : La fenêtre est [J0, J+14] uniquement (regarder vers le futur). J-3 (après résultats) supprimé — le risque est avant les résultats, pas après. Les dates de résultats yfinance sont parfois imprécises (±1-2 jours) — le tag est informatif, pas actionnable seul.
 
-### 5.3 Diversification forcée
-
-Pour éviter que le top 10 soit dominé par un seul secteur :
-
-- Maximum 3 tickers du même secteur GICS dans le top 10
-- Si un secteur dépasse 3 représentants, le 4ème est remplacé par le meilleur ticker hors top 10 actuel n'appartenant pas aux secteurs déjà au plafond (tri décroissant par score global sur le reste de la liste)
+### 5.3 Concentration Sectorielle (Paramétrable)
+Pour équilibrer la capture d'Alpha pur et la gestion du risque, la limite de tickers par secteur est désormais configurable :
+- **Paramètre** : `max_tickers_per_sector` (défaut : 3).
+- **Mode Alpha Pur** : Fixer à 10 pour autoriser un Top 10 concentré sur un seul secteur leader.
+- **Mode Défensif** : Fixer à 3 (par défaut) pour forcer une diversification et réduire le drawdown sectoriel.
+- **Logique** : Si un secteur dépasse le plafond, le système remplace les suivants par les meilleurs tickers du reste de l'univers.
 
 ### 5.4 Output final
 
@@ -863,25 +871,19 @@ L'utilisation de `yfinance` présente un risque structurel car il s'agit d'un wr
 
 ---
 
-## 14. Tests
+## 14. Stratégie de Test et Assurance Qualité
 
-### 14.1 Tests unitaires obligatoires avant déploiement
+### 14.1 Protocoles de Test Hermétiques (Obligatoires)
+Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API (FMP 250/jour) ni dépendre de la stabilité du réseau, le système impose l'isolation totale :
 
-Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
+- **VCR.py (Isolation Réseau)** : Les tests d'intégration enregistrent les requêtes réelles dans des "cassettes" YAML. Les exécutions suivantes rejouent ces cassettes, garantissant un déterminisme total et une consommation API nulle.
+- **Freezegun (Déterminisme Temporel)** : Le temps système est "gelé" (ex: simulation d'un mercredi à 10:00) pour tester les règles de marché ouvert/fermé et les fenêtres d'earnings de manière reproductible.
+- **Mocks & Fixtures** : La logique mathématique pure (Scoring) est testée via des objets Mock pré-remplis pour éviter tout effet de bord.
 
-**Logic & Scoring (`tests/test_logic.py`) :**
-
-- `test_quality_logic()` : Vérifie le calcul du ROE, Dette/EBITDA (avec fallback FMP/yfinance) et les gates d'exclusion.
-- `test_valuation_logic()` : Vérifie les limites de P/E par secteur (80 pour Tech/Health, 50 ailleurs).
-- `test_momentum_logic()` : Vérifie le calcul des performances 3M/6M et le proxy de croissance CA.
-- `test_momentum_penalties()` : Valide les pénalités anti-momentum extrême (>25% ou <-20% sur 1 mois).
-- `test_etf_pipeline()` : Valide le nouveau scoring 50/50 Pur Prix (sans volume).
-- `test_sector_diversification()` : Vérifie que le Top 10 ne contient pas plus de 3 tickers du même secteur.
-- `test_sector_exceptions()` : Valide les exceptions pour les Financials (dette) et Biotechs (P/E).
-
-**Intégration & Fetcher (`tests/test_scoring_engine.py`) :**
-
-- `test_scoring()` : Test de bout en bout récupérant des données réelles (yfinance/FMP) pour valider le pipeline complet.
+### 14.2 Structure de la Suite
+- `tests/test_logic.py` : Calculs (ROE, Surprise, Pénalités) sur données statiques.
+- `tests/test_fetcher_vcr.py` : Validation des connecteurs yfinance/FMP via cassettes.
+- `tests/test_integration_vcr.py` : Pipeline complet (EMA 200, VIX, Scoring, SQLite) simulé avec VCR et Freezegun.
 
 ---
 

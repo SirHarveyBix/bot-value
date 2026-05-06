@@ -81,14 +81,14 @@ def test_valuation_logic():
     assert "P/E négatif" in reason
 
 def test_momentum_logic():
-    # Mock info for sales growth
-    info = {"revenueGrowth": 0.20}
+    # Mock info for surprise earnings
+    info = {"surprise_pct": 0.20}
     # Mock prices (130 days of data)
     prices = pd.DataFrame({
         "Close": [100] * 130
     })
     metrics = calculate_momentum_metrics(prices, info)
-    assert metrics["sales_growth"] == 0.20
+    assert metrics["surprise_pct"] == 0.20
     assert "perf_6m" in metrics
 
 def test_momentum_penalties():

@@ -8,6 +8,7 @@ scanner:
   min_market_cap: 2000000000
   min_volume_20j: 5000000
   min_price: 5.0
+  max_tickers_per_sector: 3
   max_data_age_days: 180
   min_valid_data_ratio: 0.60
   inter_request_delay: 1.0

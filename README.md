@@ -27,6 +27,17 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
   - **Étape 1 (Chalutier)** : Screening technique massif sur l'univers Large/Mid Cap.
   - **Étape 2 (Sniper)** : Analyse fondamentale institutionnelle via FMP (API) sur la shortlist.
 
+---
+
+## 📈 Stratégie & Horizon de Trading
+
+Le bot est conçu pour le **Position Trading** (Investissement Quantitatif). Il ne s'agit pas d'un outil de Day Trading ou de Scalping.
+
+- **Horizon de temps** : 3 à 12 mois (Hold).
+- **Type de stratégie** : Swing Trading Long Terme basé sur la convergence de la Qualité (Moat) et du Momentum (Flux de capitaux).
+- **Philosophie** : Acheter des entreprises exceptionnelles (ROE 3 ans stable) au moment où le marché commence à les réévaluer à la hausse (Surprise Earnings + Momentum 6M).
+- **Gestion du risque** : Protection systématique via le **Market Gate** (SPY > EMA 200 + VIX < 25) pour éviter les drawdowns de marché baissier.
+
 ## 🛠 Installation
 
 ### 1. Prérequis

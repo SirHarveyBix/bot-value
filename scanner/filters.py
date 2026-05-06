@@ -13,7 +13,8 @@ def filter_post_scoring(df, all_data):
     if df.empty:
         return df
 
-    # 1. Diversification sectorielle : max 3 par secteur dans le top 10
+    # 1. Diversification sectorielle (Section 5.3)
+    max_per_sector = CONFIG["scanner"].get("max_tickers_per_sector", 3)
     final_top_10 = []
     sector_counts = {}
 
@@ -24,7 +25,7 @@ def filter_post_scoring(df, all_data):
         count = sector_counts.get(sector, 0)
 
         if len(final_top_10) < 10:
-            if count < 3:
+            if count < max_per_sector:
                 # 2. Data Freshness check
                 info = all_data.get(symbol, {}).get("info", {})
                 is_fresh, has_warning, warning_reason = data_freshness_check(info)
