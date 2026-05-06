@@ -16,17 +16,17 @@ Ce document définit les rôles et les responsabilités de l'équipe travaillant
 
 **Mission :** Maximiser la performance de la stratégie et minimiser les risques.
 
-- Analyse la pertinence de la shortlist technique (Top 50 Momentum).
-- Valide l'équilibre du scoring (Qualité 40% / Valo 25% / Momentum 35%).
-- Gère l'honnêteté stratégique sur les données rétrospectives (Traction CA).
+- Pilote le **Market Gate (SPY MA200)** pour protéger le capital.
+- Valide les seuils de liquidité institutionnels (Cap 2B$, Volume 5M$).
+- Analyse le **ROE 3 ans** pour confirmer le Moat structurel des entreprises.
 
 ## 🏗️ Lead Developer
 
-**Mission :** Garantir l'architecture asynchrone, la robustesse du pipeline en Entonnoir et la sécurité.
+**Mission :** Garantir l'architecture, la performance et l'intégrité des données.
 
-- Valide l'usage de `AsyncIOScheduler` (zéro fuite de mémoire).
-- Supervise la séparation stricte entre le "Chalutier" (batch) et le "Sniper" (shortlist).
-- Assure la résilience du bot face aux rate limits de yfinance (1s delay).
+- Assure la transition vers **SQLite** pour sécuriser le stockage concurrent.
+- Supervise la séparation asynchrone (yfinance vs httpx).
+- Valide l'exactitude du calcul ROE multi-années.
 
 ## 💻 Senior Developers (Team Tech)
 

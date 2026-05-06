@@ -19,17 +19,13 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 
 ## 🚀 Fonctionnalités
 
+- **Filtres de Régime (Market Gate)** : Vérification de la tendance MA200 sur le SPY (Survie du capital).
+- **Seuils Institutionnels** : Filtrage strict (Market Cap > 2B$, Volume > 5M$) pour éliminer le slippage.
+- **ROE 3 ans** : Validation du Moat sur la durée.
+- **Stockage SQLite** : Base de données robuste pour accès concurrents.
 - **Pipeline en Entonnoir (Funnel)** :
-  - **Étape 1 (Chalutier)** : Screening technique massif (Momentum 3M/6M/Relatif) sur l'univers complet (~700 tickers).
-  - **Étape 2 (Sniper)** : Analyse fondamentale institutionnelle (Qualité/Valorisation) sur une shortlist de 50 finalistes.
-- **Fiabilité & Résilience** :
-  - Architecture **Asynchrone** native (`AsyncIOScheduler`).
-  - Rate limiting strict (1.0s delay) et contrôles de qualité de données à chaque étape.
-- **Scoring ETFs** : Performance 6M, surperformance relative vs SPY (Score Pur Prix).
-- **Orchestration** :
-  - Scan automatique à 09h35 ET (NYSE).
-  - Notifications Telegram (HTML).
-  - Cache local & Scheduler intelligent.
+  - **Étape 1 (Chalutier)** : Screening technique massif sur l'univers Large/Mid Cap.
+  - **Étape 2 (Sniper)** : Analyse fondamentale institutionnelle via FMP (API) sur la shortlist.
 
 ## 🛠 Installation
 

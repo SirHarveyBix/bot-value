@@ -22,8 +22,16 @@ def test_quality_logic():
     assert metrics["roe"] == 0.20
     assert metrics["debt_ebitda"] == 2.0 # (100-50)/25
     assert metrics["fcf_yield"] == 0.1
+    assert metrics["ebitda"] == 25
+
+    # Gate: EBITDA <= 0
+    metrics["ebitda"] = 0
+    ok, reason = apply_quality_gates(metrics)
+    assert not ok
+    assert "EBITDA négatif ou nul" in reason
 
     # Gate: ROE négatif
+    metrics["ebitda"] = 25
     metrics["roe"] = -0.05
     ok, reason = apply_quality_gates(metrics)
     assert not ok
@@ -48,19 +56,29 @@ def test_valuation_logic():
     assert metrics["pe"] == 25
 
     # Gate: P/E trop élevé pour Tech (limit 80)
-    ok, reason = apply_valuation_gates(metrics)
-    assert ok
+    is_excluded, v_ok, reason = apply_valuation_gates(metrics)
+    assert not is_excluded
+    assert v_ok
 
     metrics["pe"] = 85
-    ok, reason = apply_valuation_gates(metrics)
-    assert not ok
+    is_excluded, v_ok, reason = apply_valuation_gates(metrics)
+    assert is_excluded
+    assert not v_ok
     assert "P/E trop élevé" in reason
 
     # Gate: P/E trop élevé pour autre secteur (limit 50)
     metrics["sector"] = "Consumer Staples"
     metrics["pe"] = 55
-    ok, reason = apply_valuation_gates(metrics)
-    assert not ok
+    is_excluded, v_ok, reason = apply_valuation_gates(metrics)
+    assert is_excluded
+    assert not v_ok
+
+    # Gate: P/E négatif (exclusion)
+    metrics["pe"] = -5
+    is_excluded, v_ok, reason = apply_valuation_gates(metrics)
+    assert is_excluded
+    assert not v_ok
+    assert "P/E négatif" in reason
 
 def test_momentum_logic():
     # Mock info for sales growth
@@ -189,8 +207,69 @@ def test_sector_exceptions():
         "marketCap": 4_000_000_000, # < 5B$
     }
     v_metrics = calculate_valuation_metrics(info_bio)
-    ok, _ = apply_valuation_gates(v_metrics)
-    assert ok # Pas exclu malgré P/E négatif
+    # P/E négatif -> is_excluded=False, v_ok=False (fallback 50/50)
+    is_excluded, v_ok, _ = apply_valuation_gates(v_metrics)
+    assert not is_excluded
+    assert not v_ok
+
+    # Test 3: P/E TTM fallback penalty flag
+    info_ttm = {
+        "forwardPE": None,
+        "trailingPE": 15,
+        "sector": "Technology"
+    }
+    v_metrics = calculate_valuation_metrics(info_ttm)
+    assert v_metrics["pe"] == 15
+    assert v_metrics["pe_flag"] == "P/E TTM used as fallback"
+
+def test_valuation_score_calculation():
+    from scanner.scoring.engine import compute_valuation_score
+    
+    # Cas 1 : Nominal (PEG présent)
+    row = pd.Series({
+        "rank_pe": 80,
+        "rank_ev_ebitda": 60,
+        "rank_peg": 70,
+        "pe_flag": None
+    })
+    score, ok = compute_valuation_score(row)
+    # 80*0.45 + 60*0.35 + 70*0.20 = 36 + 21 + 14 = 71
+    assert ok
+    assert score == 71.0
+
+    # Cas 2 : PEG absent (Redistribution 56/44)
+    row_no_peg = pd.Series({
+        "rank_pe": 80,
+        "rank_ev_ebitda": 60,
+        "rank_peg": None,
+        "pe_flag": None
+    })
+    score, ok = compute_valuation_score(row_no_peg)
+    # 80*0.56 + 60*0.44 = 44.8 + 26.4 = 71.2
+    assert ok
+    assert score == 71.2
+
+    # Cas 3 : P/E TTM fallback (Pénalité -5)
+    row_ttm = pd.Series({
+        "rank_pe": 80,
+        "rank_ev_ebitda": 60,
+        "rank_peg": 70,
+        "pe_flag": "P/E TTM used as fallback"
+    })
+    score, ok = compute_valuation_score(row_ttm)
+    assert ok
+    assert score == 66.0 # 71 - 5
+
+    # Cas 4 : Trop de NaNs (Exclusion pilier)
+    row_nan = pd.Series({
+        "rank_pe": 80,
+        "rank_ev_ebitda": None,
+        "rank_peg": None,
+        "pe_flag": None
+    })
+    score, ok = compute_valuation_score(row_nan)
+    assert not ok
+    assert score is None
 
 def test_etf_pipeline():
     from scanner.scoring.engine import etf_scoring_pipeline

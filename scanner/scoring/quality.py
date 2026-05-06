@@ -6,7 +6,12 @@ def calculate_quality_metrics(ticker_info):
     Extrait les métriques de qualité depuis le dictionnaire info.
     """
     try:
-        roe = ticker_info.get("returnOnEquity")
+        # Section 4.1: Priorité ROE 3 ans
+        roe_3y = ticker_info.get("roe_3y")
+        roe_ttm = ticker_info.get("returnOnEquity") # returnOnEquity dans ticker_info contient souvent le ROE TTM ou déjà le 3y si FMP
+        
+        roe_used = roe_3y if roe_3y is not None else roe_ttm
+        
         margin = ticker_info.get("operatingMargins")
         sector = ticker_info.get("sector")
 
@@ -40,10 +45,11 @@ def calculate_quality_metrics(ticker_info):
             logger.debug(f"Utilisation de l'Operating Cashflow pour {ticker_info.get('symbol')} (FCF manquant)")
 
         return {
-            "roe": roe,
+            "roe": roe_used,
             "margin": margin,
             "debt_ebitda": debt_ebitda,
-            "fcf_yield": fcf_yield
+            "fcf_yield": fcf_yield,
+            "ebitda": ebitda
         }
     except Exception as e:
         logger.error(f"Erreur calcul métriques qualité: {e}")
@@ -55,6 +61,11 @@ def apply_quality_gates(metrics):
     """
     roe = metrics.get("roe")
     debt_ebitda = metrics.get("debt_ebitda")
+    ebitda = metrics.get("ebitda")
+
+    # Gate: EBITDA <= 0 exclu (Section 4.1)
+    if ebitda is not None and ebitda <= 0:
+        return False, "EBITDA négatif ou nul"
 
     # ROE négatif exclu
     if roe is not None and roe < 0:

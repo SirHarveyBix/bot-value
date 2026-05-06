@@ -36,6 +36,7 @@ def calculate_valuation_metrics(ticker_info):
 def apply_valuation_gates(metrics):
     """
     Applique les seuils d'exclusion pour la valorisation.
+    Retourne (is_excluded, is_v_ok, reason)
     """
     pe = metrics.get("pe")
     ev_ebitda = metrics.get("ev_ebitda")
@@ -46,20 +47,30 @@ def apply_valuation_gates(metrics):
     # On suspend le gate P/E négatif
     is_biotech_exception = sector == "Health Care" and mcap < 5_000_000_000
 
-    if not is_biotech_exception:
-        if pe is None or pe <= 0:
-            return False, "P/E manquant ou négatif"
+    # Cas : Pas de P/E disponible
+    if pe is None:
+        return False, False, "P/E manquant"
+
+    # Cas : P/E négatif
+    if pe <= 0:
+        if is_biotech_exception:
+            # On garde le ticker mais on invalide le pilier valorisation (score 50/50)
+            # car un P/E négatif n'a pas de sens pour le scoring
+            return False, False, "P/E négatif (Biotech exception)"
+        else:
+            # Exclusion pure
+            return True, False, "P/E négatif"
 
     # Seuil P/E par secteur (Section 4.1)
     pe_limit = 50
     if sector in ["Technology", "Health Care"]:
         pe_limit = 80
 
-    if pe is not None and pe > pe_limit:
-        return False, f"P/E trop élevé: {pe:.1f} (limit {pe_limit})"
+    if pe > pe_limit:
+        return True, False, f"P/E trop élevé: {pe:.1f} (limit {pe_limit})"
 
     if ev_ebitda and ev_ebitda > 40:
-        return False, f"EV/EBITDA trop élevé: {ev_ebitda:.1f}"
+        return True, False, f"EV/EBITDA trop élevé: {ev_ebitda:.1f}"
 
-    return True, None
+    return False, True, None
 

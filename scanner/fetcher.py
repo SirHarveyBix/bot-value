@@ -1,6 +1,5 @@
-import time
-import requests
-
+import asyncio
+import httpx
 import pandas as pd
 import yfinance as yf
 
@@ -13,15 +12,18 @@ TTL_PRICES = 4 * 3600
 
 SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "XLU", "XLC", "SPY"]
 
-def fetch_prices_batch(tickers, period="1y"):
+async def fetch_prices_batch(tickers, period="1y"):
     """
     Télécharge les prix historiques pour une liste de tickers via yfinance.
+    Délégué à un thread pour ne pas bloquer l'event loop.
     """
     if not tickers:
         return pd.DataFrame()
+    
     logger.info(f"Téléchargement des prix pour {len(tickers)} tickers...")
     try:
-        data = yf.download(
+        data = await asyncio.to_thread(
+            yf.download,
             tickers=" ".join(tickers),
             period=period,
             group_by="ticker",
@@ -34,9 +36,9 @@ def fetch_prices_batch(tickers, period="1y"):
         logger.error(f"Erreur lors du batch download: {e}")
         return pd.DataFrame()
 
-def fetch_fmp_data(symbol):
+async def fetch_fmp_data(client, symbol):
     """
-    Récupère les fondamentaux institutionnels via Financial Modeling Prep.
+    Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
     """
     api_key = CONFIG["scanner"].get("fmp_api_key")
     base_url = CONFIG["scanner"].get("fmp_base_url")
@@ -45,40 +47,61 @@ def fetch_fmp_data(symbol):
         logger.warning(f"Clé FMP manquante. Repli sur yfinance pour {symbol}.")
         return None
 
-    # On a besoin de : Quote, Ratios-TTM, Key-Metrics-TTM
-    # Pour minimiser les appels sur plan gratuit (250/jour), on cible l'essentiel
     try:
+        # On regroupe les appels pour paralléliser légèrement si besoin, 
+        # mais on reste prudent sur le rate limit du plan gratuit (250/jour)
         # 1. Ratios TTM (ROE, Marges, P/E, PEG)
-        r_resp = requests.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}")
+        r_task = client.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}")
         # 2. Key Metrics TTM (Net Debt / EBITDA, Market Cap)
-        k_resp = requests.get(f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}")
+        k_task = client.get(f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}")
         # 3. Profile (Sector, Industry, Name)
-        p_resp = requests.get(f"{base_url}/profile/{symbol}?apikey={api_key}")
+        p_task = client.get(f"{base_url}/profile/{symbol}?apikey={api_key}")
+        # 4. Income Statement Annual (pour ROE historique)
+        is_task = client.get(f"{base_url}/income-statement/{symbol}?limit=3&apikey={api_key}")
+        # 5. Balance Sheet Annual (pour ROE historique)
+        bs_task = client.get(f"{base_url}/balance-sheet-statement/{symbol}?limit=3&apikey={api_key}")
 
-        if r_resp.status_code == 200 and k_resp.status_code == 200 and p_resp.status_code == 200:
-            r_data = r_resp.json()
-            k_data = k_resp.json()
-            p_data = p_resp.json()
+        responses = await asyncio.gather(r_task, k_task, p_task, is_task, bs_task)
+        
+        if all(resp.status_code == 200 for resp in responses):
+            r_data = responses[0].json()
+            k_data = responses[1].json()
+            p_data = responses[2].json()
+            is_data = responses[3].json()
+            bs_data = responses[4].json()
 
             if r_data and k_data and p_data:
-                # Normalisation vers un format compatible avec le scoring
                 r = r_data[0]
                 k = k_data[0]
                 p = p_data[0]
+                
+                # Calcul ROE 3 ans (FMP)
+                roe_3y = None
+                if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
+                    roes = []
+                    for i in range(min(3, len(is_data), len(bs_data))):
+                        ni = is_data[i].get("netIncome", 0)
+                        te = bs_data[i].get("totalStockholdersEquity", 1) # Avoid div by zero
+                        if te and te > 0:
+                            roes.append(ni / te)
+                    if roes:
+                        roe_3y = sum(roes) / len(roes)
                 
                 return {
                     "symbol": symbol,
                     "longName": p.get("companyName"),
                     "sector": p.get("sector"),
                     "marketCap": p.get("mktCap"),
-                    "returnOnEquity": r.get("returnOnEquityTTM"),
+                    "returnOnEquity": roe_3y if roe_3y is not None else r.get("returnOnEquityTTM"),
+                    "roe_ttm": r.get("returnOnEquityTTM"),
+                    "roe_3y": roe_3y,
                     "operatingMargins": r.get("operatingProfitMarginTTM"),
                     "totalDebt": k.get("totalDebtTTM"),
-                    "totalCash": k.get("netDebtTTM"), # On va tricher un peu car on a directement netDebt
+                    "totalCash": k.get("netDebtTTM"),
                     "netDebt": k.get("netDebtTTM"),
                     "ebitda": k.get("ebitdaTTM"),
                     "freeCashflow": k.get("freeCashFlowTTM"),
-                    "forwardPE": r.get("priceEarningsRatioTTM"), # FMP ratios are TTM, used as proxy for Forward
+                    "forwardPE": r.get("priceEarningsRatioTTM"),
                     "enterpriseToEbitda": r.get("enterpriseValueOverEBITDATTM"),
                     "pegRatio": r.get("pegRatioTTM"),
                     "revenueGrowth": r.get("revenueGrowthTTM"),
@@ -89,40 +112,52 @@ def fetch_fmp_data(symbol):
         logger.error(f"Erreur API FMP pour {symbol}: {e}")
         return None
 
-def fetch_ticker_info(ticker_symbol):
+async def fetch_ticker_info(symbol, client=None):
     """
-    Récupère les informations d'un ticker avec cache, en priorité via FMP puis yfinance.
+    Récupère les informations d'un ticker avec cache.
     """
-    # 1. Vérifier le cache
-    cached_data = cache.get("fundamentals", ticker_symbol, TTL_FUNDAMENTALS)
+    cached_data = cache.get("fundamentals", symbol, TTL_FUNDAMENTALS)
     if cached_data:
         return cached_data
 
-    # 2. Priorité FMP (Sniper)
-    info = fetch_fmp_data(ticker_symbol)
+    info = None
+    if client:
+        info = await fetch_fmp_data(client, symbol)
     
-    # 3. Fallback yfinance si FMP échoue ou absent
     if not info:
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                ticker = yf.Ticker(ticker_symbol)
-                info = ticker.info
-                if info and (info.get("currentPrice") or info.get("regularMarketPrice")):
-                    info["source"] = "yfinance"
-                    break
-            except Exception as e:
-                logger.warning(f"Erreur fallback yfinance {ticker_symbol}: {e}")
-                time.sleep(1)
+        # Fallback yfinance (async thread)
+        try:
+            ticker = yf.Ticker(symbol)
+            # ticker.info est une propriété qui fait un appel réseau au premier accès
+            info = await asyncio.to_thread(lambda: ticker.info)
+            if info and (info.get("currentPrice") or info.get("regularMarketPrice")):
+                info["source"] = "yfinance"
+        except Exception as e:
+            logger.warning(f"Erreur fallback yfinance {symbol}: {e}")
 
     if info:
-        cache.set("fundamentals", ticker_symbol, info)
+        cache.set("fundamentals", symbol, info)
     return info
 
-def fetch_all_data(tickers, etfs=None, prices_batch=None):
+async def fetch_spy_history():
+    """Récupère l'historique du SPY pour le calcul de la MA200."""
+    logger.info("Récupération de l'historique SPY pour le Market Gate...")
+    try:
+        data = await asyncio.to_thread(
+            yf.download,
+            tickers="SPY",
+            period="2y", # On prend 2 ans pour être sûr d'avoir 200 jours de bourse
+            progress=False,
+            auto_adjust=True
+        )
+        return data
+    except Exception as e:
+        logger.error(f"Erreur fetch SPY: {e}")
+        return pd.DataFrame()
+
+async def fetch_all_data(tickers, etfs=None, prices_batch=None):
     """
-    Orchestre la récupération de toutes les données pour une shortlist de tickers.
-    Le Sniper : Utilise FMP pour la shortlist.
+    Orchestre la récupération de toutes les données de manière asynchrone et non-bloquante.
     """
     if etfs is None:
         etfs = []
@@ -131,26 +166,29 @@ def fetch_all_data(tickers, etfs=None, prices_batch=None):
     results = {}
 
     if prices_batch is None:
-        prices_batch = fetch_prices_batch(all_tickers)
+        prices_batch = await fetch_prices_batch(all_tickers)
 
-    delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
-    for i, symbol in enumerate(tickers):
-        if i > 0 and delay > 0:
-            time.sleep(delay)
+    delay = CONFIG["scanner"].get("inter_request_delay", 1.0)
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for i, symbol in enumerate(tickers):
+            if i > 0 and delay > 0:
+                await asyncio.sleep(delay)
+                
+            logger.info(f"Sniper : Récupération des fondamentaux pour {symbol}...")
+            info = await fetch_ticker_info(symbol, client=client)
+
+            prices = None
+            if isinstance(prices_batch.columns, pd.MultiIndex):
+                if symbol in prices_batch.columns.levels[0]:
+                    prices = prices_batch[symbol]
             
-        logger.info(f"Sniper : Récupération des fondamentaux pour {symbol}...")
-        info = fetch_ticker_info(symbol)
+            results[symbol] = {
+                "info": info,
+                "prices": prices
+            }
 
-        prices = None
-        if isinstance(prices_batch.columns, pd.MultiIndex):
-            if symbol in prices_batch.columns.levels[0]:
-                prices = prices_batch[symbol]
-        
-        results[symbol] = {
-            "info": info,
-            "prices": prices
-        }
-
+    # Pour les ETFs, on ne récupère que les prix (déjà dans le batch)
     for s_etf in list(set(etfs + SECTOR_ETFS)):
         prices = None
         if isinstance(prices_batch.columns, pd.MultiIndex):
@@ -163,4 +201,3 @@ def fetch_all_data(tickers, etfs=None, prices_batch=None):
         }
 
     return results
-

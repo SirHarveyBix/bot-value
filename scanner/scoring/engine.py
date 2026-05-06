@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from scanner.config import CONFIG
+from scanner.config import CONFIG, logger
 from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, calculate_momentum_metrics
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
@@ -59,6 +59,36 @@ def momentum_screening_pipeline(price_data, symbols):
     df["m_score"] = df["perf_6m"] * 0.6 + df["perf_3m"] * 0.4
     return df.sort_values("m_score", ascending=False)
 
+def compute_valuation_score(row):
+    vw = CONFIG["scoring"]["valuation_subweights"]
+    
+    # Compter les NaNs dans le pilier valorisation
+    # (pe est garanti présent si v_ok=True, mais vérifions quand même)
+    v_ranks = [row["rank_pe"], row["rank_ev_ebitda"], row["rank_peg"]]
+    nan_count = sum(1 for r in v_ranks if pd.isna(r))
+    
+    if nan_count >= 2:
+        # Si plus de 2 critères sur 3 sont NaN, on invalide le pilier
+        return None, False
+
+    # Redistribution du poids si PEG est manquant (Section 4.1)
+    if pd.isna(row["rank_peg"]):
+        # P/E Forward -> 56%, EV/EBITDA -> 44%
+        v_score = (row["rank_pe"] or 0) * 0.56 + (row["rank_ev_ebitda"] or 0) * 0.44
+    else:
+        v_score = (
+            (row["rank_pe"] or 0) * vw["pe_forward"] +
+            (row["rank_ev_ebitda"] or 0) * vw["ev_ebitda"] +
+            (row["rank_peg"] or 0) * vw["peg"]
+        )
+    
+    # Pénalité P/E TTM (Section 4.1)
+    if pd.notna(row.get("pe_flag")):
+        v_score -= 5
+        
+    return max(0, v_score), True
+
+
 def stock_scoring_pipeline(all_data, symbols):
     """Pipeline de scoring pour les actions."""
     rows = []
@@ -81,9 +111,14 @@ def stock_scoring_pipeline(all_data, symbols):
         m_metrics = calculate_momentum_metrics(prices, info, s_data)
 
         q_ok, q_reason = apply_quality_gates(q_metrics)
-        v_ok, v_reason = apply_valuation_gates(v_metrics)
+        v_excluded, v_ok, v_reason = apply_valuation_gates(v_metrics)
 
         if not q_ok:
+            logger.debug(f"Exclusion {symbol} (Qualité): {q_reason}")
+            continue
+        
+        if v_excluded:
+            logger.debug(f"Exclusion {symbol} (Valorisation): {v_reason}")
             continue
 
         row = {
@@ -94,7 +129,8 @@ def stock_scoring_pipeline(all_data, symbols):
             **q_metrics,
             **v_metrics,
             **m_metrics,
-            "v_ok": v_ok
+            "v_ok": v_ok,
+            "pe_flag": v_metrics.get("pe_flag")
         }
         rows.append(row)
 
@@ -127,12 +163,12 @@ def stock_scoring_pipeline(all_data, symbols):
     df["score_quality"] = (df["rank_roe"].fillna(0) * qw["roe"] + df["rank_margin"].fillna(0) * qw["margin"] +
                           df["rank_fcf"].fillna(0) * qw["fcf_yield"] + df["rank_debt"].fillna(0) * qw["debt_ebitda"])
 
-    vw = CONFIG["scoring"]["valuation_subweights"]
-    df["score_valuation"] = (
-        df["rank_pe"].fillna(0) * vw["pe_forward"] +
-        df["rank_ev_ebitda"].fillna(0) * vw["ev_ebitda"] +
-        df["rank_peg"].fillna(0) * vw["peg"]
-    )
+    # Appliquer le calcul du score de valorisation
+    v_results = df.apply(compute_valuation_score, axis=1)
+    df["score_valuation"] = v_results.apply(lambda x: x[0])
+    # Mettre à jour v_ok si le score a été invalidé par manque de données
+    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1])
+
     mw = CONFIG["scoring"]["momentum_subweights"]
     df["score_momentum"] = (
         df["rank_perf_6m"].fillna(0) * mw["perf_6m"] +

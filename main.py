@@ -7,7 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
 
 from scanner.config import logger
-from scanner.fetcher import fetch_all_data, fetch_prices_batch
+from scanner.fetcher import fetch_all_data, fetch_prices_batch, fetch_spy_history
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.notifier import notify
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
@@ -31,6 +31,21 @@ async def run_scanner(force=False):
         return
 
     try:
+        # 0. Market Gate : Vérification de la tendance (SPY MA200)
+        spy_history = await fetch_spy_history()
+        market_regime = "unknown"
+        if not spy_history.empty:
+            spy_close = spy_history["Close"]
+            ma200 = spy_close.rolling(window=200).mean().iloc[-1]
+            current_spy = spy_close.iloc[-1]
+            
+            if current_spy < ma200:
+                market_regime = "bear"
+                logger.warning(f"🚨 MARCHÉ BAISSIER DÉTECTÉ (SPY {current_spy:.2f} < MA200 {ma200:.2f})")
+            else:
+                market_regime = "bull"
+                logger.info(f"✅ MARCHÉ HAUSSIER (SPY {current_spy:.2f} > MA200 {ma200:.2f})")
+
         # 1. Universe Builder
         universe = load_universe()
         initial_stocks = universe.get("stocks", [])
@@ -41,7 +56,7 @@ async def run_scanner(force=False):
 
         # 3. Le Chalutier : Fetch uniquement les prix pour tout l'univers éligible
         # C'est rapide et sans risque de rate-limit 429
-        price_data = fetch_prices_batch(eligible_stocks)
+        price_data = await fetch_prices_batch(eligible_stocks)
 
         # Vérification du ratio de données pour le batch
         if not check_batch_data_ratio(price_data, len(eligible_stocks)):
@@ -57,7 +72,7 @@ async def run_scanner(force=False):
 
         # 5. Le Sniper : Fetch des fondamentaux complets uniquement pour la shortlist
         # On passe price_data pour éviter de retélécharger les historiques de prix
-        all_data = fetch_all_data(shortlist_stocks, initial_etfs, prices_batch=price_data)
+        all_data = await fetch_all_data(shortlist_stocks, initial_etfs, prices_batch=price_data)
 
         # Vérification du ratio de données pour la shortlist (Sniper)
         if not check_data_ratio(all_data, len(shortlist_stocks)):
@@ -74,7 +89,12 @@ async def run_scanner(force=False):
         top_5_etfs = ranked_etfs_df.head(5)
 
         # 7. Storage
-        save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks))
+        market_data = {
+            "regime": market_regime,
+            "spy_price": current_spy if not spy_history.empty else None,
+            "spy_ma200": ma200 if not spy_history.empty else None
+        }
+        save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
         # 8. Notify (Maintenant awaitable)
         await notify(top_10_stocks, top_5_etfs)

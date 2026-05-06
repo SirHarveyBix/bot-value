@@ -41,12 +41,12 @@
 
 **PO :** Donc on définit des filtres d'éligibilité stricts avant même le scoring :
 
-- Market cap minimum 500M$ (mid-cap et plus)
-- Volume journalier moyen 20 jours > 1M$ (exécutable)
+- Market cap minimum 2B$ (Large & Mid caps)
+- Volume journalier moyen 20 jours > 5M$ (exécutable institutionnel)
 - Prix > 5$ (éviter les zones penny stock, split post-crise)
 - Listé sur NYSE, NASDAQ, ou AMEX (pas OTC)
 
-**VE :** Ajoute un filtre sur l'ancienneté des données : au moins 2 ans de données financières disponibles. Une entreprise qui vient d'entrer en bourse n'a pas assez de track record pour une analyse value sérieuse.
+**VE :** C'est beaucoup plus sérieux. Cela nous protège du slippage.
 
 **PO :** L'univers de départ sera le **S&P 500 + Russell 1000 + un panier d'ETFs sectoriels et thématiques** (environ 150 ETFs). Au total, on vise ~850 instruments avant filtres de liquidité, ce qui nous amènera à environ 600-700 instruments scorés. C'est le bon calibrage.
 
@@ -125,12 +125,14 @@ Langage          : Python 3.11+
 Pour maximiser l'univers tout en garantissant la qualité institutionnelle des signaux finaux sans coût d'API, le système adopte une architecture asymétrique :
 
 ### Étape 1 : Le Chalutier (yfinance)
+
 - **Cible** : ~700 tickers.
 - **Action** : Batch download des prix historiques (OHLCV).
 - **Filtres** : Liquidité, Market Cap, Momentum (3M, 6M, Relatif).
 - **Sortie** : Une "Shortlist" des 50 meilleurs potentiels techniques.
 
 ### Étape 2 : Le Sniper (API Officielle - ex: FMP)
+
 - **Cible** : Le Top 50 issu du Chalutier.
 - **Action** : Fetch des fondamentaux propres via API versionnée.
 - **Calcul** : Qualité (ROE, Marges, Dette/EBITDA) et Valorisation (P/E, PEG).
@@ -157,8 +159,8 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 | Filtre                | Seuil                           | Source                  | Raison                              |
 | --------------------- | ------------------------------- | ----------------------- | ----------------------------------- |
-| Market Cap minimum    | > 500 M$                        | yfinance `marketCap`    | Éliminer illiquidité structurelle   |
-| Volume moyen 20j      | > 1 000 000 $                   | yfinance OHLCV          | Exécutable sans impact marché       |
+| Market Cap minimum    | > 2 000 M$                      | yfinance `marketCap`    | Éviter les micro-caps volatiles     |
+| Volume moyen 20j      | > 5 000 000 $                   | yfinance OHLCV          | Exécutable institutionnel           |
 | Prix unitaire         | > 5.00 $                        | yfinance `currentPrice` | Éviter zones penny stock            |
 | Listing               | NYSE / NASDAQ / AMEX            | yfinance `exchange`     | Exclure OTC, marchés exotiques      |
 | Ancienneté données    | > 2 ans d'historique disponible | yfinance date min       | Track record minimum value          |
@@ -172,39 +174,43 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 ## 3bis. Module 2 — Data Fetcher
 
-### 2.1 Stratégie de fetch
+### 2.1 Stratégie de fetch asynchrone (Non-bloquant)
 
-**Fetch prix OHLCV (batch) :**
+Pour garantir que l'Event Loop d'asyncio ne gèle jamais (notamment pour les notifications Telegram et le scheduler), le fetcher utilise une approche hybride :
+
+**Fetch prix OHLCV (yfinance via Threads) :**
+`yfinance` étant purement synchrone, ses appels sont enveloppés dans des threads pour ne pas bloquer la boucle principale.
 
 ```python
-# Un seul appel pour tous les tickers — évite le rate limiting
-prices = yf.download(
+# Utilisation de asyncio.to_thread pour libérer l'event loop
+prices = await asyncio.to_thread(
+    yf.download,
     tickers=" ".join(all_tickers),
     period="1y",
     group_by="ticker",
     auto_adjust=True,
-    threads=True,     # parallélisme interne yfinance
+    threads=True,
     progress=False
 )
 ```
 
-**Fetch fondamentaux (individuel avec cache) :**
+**Fetch fondamentaux (httpx pour FMP) :**
+L'API FMP est interrogée via `httpx.AsyncClient` pour une asynchronicité native.
 
-- `yf.Ticker(ticker).info` → données fondamentales (TTM)
-- `yf.Ticker(ticker).financials` → bilans annuels (pour ROE multi-année en v1.1)
-- `yf.Ticker(ticker).calendar` → earnings calendar
+```python
+async with httpx.AsyncClient() as client:
+    response = await client.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}")
+    data = response.json()
+```
 
 ### 2.2 Rate limiting et résilience
 
-```python
-MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 5
-INTER_REQUEST_DELAY = 0.5   # secondes entre appels individuels .info
-MAX_WORKERS = 8              # ThreadPoolExecutor pour fetch .info parallèle
+Le système applique un **Rate Limiting Séquentiel** strict pour éviter le bannissement IP (Erreur 429) :
 
-# Si HTTP 429 reçu : pause 60s avant reprise
-# Si HTTP 429 sur batch download : fallback vers fetch individuel
-```
+1. **Délai asynchrone** : Entre chaque appel `.info` (yfinance) ou API (FMP), un `await asyncio.sleep(INTER_REQUEST_DELAY)` est observé.
+2. **INTER_REQUEST_DELAY** : Fixé à 1.0s par défaut pour garantir la pérennité de l'accès Yahoo Finance.
+3. **MAX_RETRIES** : 3 tentatives avec backoff exponentiel asynchrone.
+4. **Fallback** : Si FMP échoue sur un ticker de la shortlist, le système tente un fallback asynchrone vers `yf.Ticker(ticker).info` (via `to_thread`).
 
 ### 2.3 Validation des données reçues
 
@@ -267,13 +273,21 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 
 ## 4. Module 3 — Scoring Engine
 
+### 4.0 Filtre de Régime (Market Gate) — PRIORITÉ SURVIE
+
+Avant tout calcul de scoring ou d'éligibilité shortlist, le système vérifie la tendance globale du marché US.
+
+- **Indicateur** : Moyenne Mobile Simple 200 jours (MA200) du SPY.
+- **Règle de Survie** : Si `Prix SPY < MA200 SPY`, le marché est considéré en régime baissier (Bear Market).
+- **Conséquence** : Le scan continue pour information, mais tous les signaux sont marqués d'une alerte critique `🚨 MARCHÉ BAISSIER (SPY < MA200) : EXPOSITION DÉCONSEILLÉE`. Aucun signal "Top Action" ne doit être considéré comme une recommandation d'achat immédiate dans ce régime.
+
 ### 4.1 Pipeline Actions : définition des critères
 
 #### PILIER 1 : QUALITÉ (pondération 35%)
 
 | Métrique             | Donnée yfinance                    | Calcul                                    | Ranking            |
 | -------------------- | ---------------------------------- | ----------------------------------------- | ------------------ |
-| ROE TTM              | `returnOnEquity`                   | Valeur directe (TTM — voir note)          | Cross-universe     |
+| ROE (Moyenne 3 ans)  | `ticker.financials`                | Moyenne du ROE sur les 3 derniers bilans  | Cross-universe     |
 | Marge opérationnelle | `operatingMargins`                 | Valeur directe                            | Intra-secteur GICS |
 | Dette nette / EBITDA | `totalDebt`, `totalCash`, `ebitda` | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
 | FCF Yield proxy      | `freeCashflow`, `marketCap`        | freeCashflow / marketCap                  | Cross-universe     |
@@ -329,11 +343,11 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 
 #### PILIER 3 : MOMENTUM (pondération 35%)
 
-| Métrique                      | Calcul                                                    | Ranking        |
-| ----------------------------- | --------------------------------------------------------- | -------------- |
-| Performance 6 mois            | (Prix J0 - Prix J-126) / Prix J-126                       | Cross-universe |
-| Performance 3 mois            | (Prix J0 - Prix J-63) / Prix J-63                         | Cross-universe |
-| Surperformance sectorielle 6M | Perf 6M ticker - Perf 6M ETF sectoriel SPDR               | Intra-secteur  |
+| Métrique                      | Calcul                                         | Ranking        |
+| ----------------------------- | ---------------------------------------------- | -------------- |
+| Performance 6 mois            | (Prix J0 - Prix J-126) / Prix J-126            | Cross-universe |
+| Performance 3 mois            | (Prix J0 - Prix J-63) / Prix J-63              | Cross-universe |
+| Surperformance sectorielle 6M | Perf 6M ticker - Perf 6M ETF sectoriel SPDR    | Intra-secteur  |
 | Traction Fondamentale (proxy) | `revenueGrowth` (TTM yfinance) — croissance CA | Cross-universe |
 
 > **Définition Prix J0** : close du dernier jour de bourse disponible avant le déclenchement du scan (= close J-1). À 09h30 ET, le marché vient d'ouvrir — les prix intraday ne sont pas utilisés. `yf.download(ticker, period="1d")["Close"].iloc[-1]` du jour précédent.
@@ -402,10 +416,10 @@ score_global = (
 
 Pour les ETFs, le scoring est purement asymétrique et se concentre sur l'action des prix, excluant le volume (potentiellement toxique en cas de panique) :
 
-| Critère             | Calcul                                             | Pondération |
-| ------------------- | -------------------------------------------------- | ----------- |
-| Performance 6 mois  | (Prix J0 - Prix J-126) / Prix J-126                | 50%         |
-| Surperf vs SPY 6M   | Perf 6M ETF - Perf 6M SPY                          | 50%         |
+| Critère            | Calcul                              | Pondération |
+| ------------------ | ----------------------------------- | ----------- |
+| Performance 6 mois | (Prix J0 - Prix J-126) / Prix J-126 | 50%         |
+| Surperf vs SPY 6M  | Perf 6M ETF - Perf 6M SPY           | 50%         |
 
 > **Note Volume** : Le critère de volume a été supprimé. Une hausse de volume sur un ETF peut signifier une panique vendeuse (liquidation). Le scoring se concentre sur la surperformance relative et le momentum lissé.
 
@@ -580,25 +594,29 @@ async def send_signals(tickers: list):
         await asyncio.sleep(1.5)  # Délai de sécurité asymétrique pour éviter HTTP 429
 ```
 
-> **Architecture async** : `python-telegram-bot==21.x` est async-first (asyncio). Le scheduler APScheduler 3.x est synchrone — utiliser `asyncio.run()` pour exécuter les coroutines Telegram depuis le job scheduler. Alternativement, migrer vers APScheduler 4.x (natif async) en v1.1.
+> **Architecture async** : `python-telegram-bot==21.x` est async-first (asyncio). Pour éviter tout conflit d'Event Loop et garantir une fiabilité institutionnelle, le système utilise **APScheduler 4.x (v4.0.0a5+)** qui est nativement asynchrone. Cela permet au planificateur de partager la même boucle d'événements que Telegram et httpx, évitant les blocages et les crashs silencieux.
 
 ---
 
-## 7. Module 6 — Storage & History (v1.0 JSON / v1.1 SQLite)
+## 7. Module 6 — Storage & History (SQLite)
 
 ### 7.1 Stratégie de stockage
-En v1.0 (MVP), le stockage repose sur des fichiers JSON plats pour une simplicité maximale de déploiement. La migration vers **SQLite** est prévue en v1.1 pour supporter l'interface web dynamique et les requêtes analytiques.
 
-### 7.2 Structure fichiers JSON (v1.0)
+Le stockage repose sur une base de données **SQLite** (`data/signals/scanner_history.db`) pour garantir l'intégrité des données lors d'accès concurrents (Bot + Dashboard Web).
+
+### 7.2 Structure de la base de données
+
+- **Table `scans`** : Enregistre chaque run (date, métriques marché comme SPY MA200).
+- **Table `signals`** : Stocke les signaux Top 10 et Top 5 ETFs avec tous leurs scores et métriques.
+- **Table `universe_metadata`** : Historique de la taille de l'univers et des exclusions.
+
+### 7.3 Cache (JSON persistant)
 
 ```
 data/
 ├── universe/
 │   ├── tickers_universe.json          # Fichier statique mis à jour mensuellement
 │   └── eligible_universe_YYYY-MM-DD.json  # Univers filtré du jour
-├── signals/
-│   ├── signals_YYYY-MM-DD.json        # Résultats complets du scan du jour
-│   └── signals_latest.json            # Symlink vers le fichier du jour (pour l'UI)
 ├── cache/
 │   └── fundamentals_cache.json        # Cache des données yfinance (TTL 24h)
 └── logs/
@@ -668,10 +686,13 @@ data/
 ## 8. Interface HTML (v1.0 Statique / v1.1 Dynamique)
 
 ### 8.1 Approche v1.0
+
 Une page HTML statique générée quotidiennement depuis le JSON `signals_latest.json`.
+
 - **Stack** : Vanilla JS + http.server.
 
 ### 8.2 Transition v1.1 (Roadmap)
+
 Migration vers une API **FastAPI** interrogeant la base **SQLite** locale pour un dashboard interactif.
 
 ---
@@ -733,6 +754,7 @@ pandas-market-calendars>=4.3.0 # Calendrier trading US — exclure jours férié
 
 # Alertes
 python-telegram-bot>=21.0,<22.0   # API async-first (asyncio)
+httpx>=0.27.0,<0.28.0             # Client HTTP asynchrone pour FMP API
 
 # Configuration
 PyYAML>=6.0.1,<7.0.0
@@ -907,6 +929,7 @@ CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4 heures (prix intraday)
 ### 13.4 Fragilité du Scraping (yfinance)
 
 L'utilisation de `yfinance` présente un risque structurel car il s'agit d'un wrapper non-officiel. En cas de changement majeur de Yahoo Finance :
+
 1. **Surveillance** : Le bot logue tout échec de fetch. Si le ratio de données valides tombe sous 60%, le scan s'arrête.
 2. **Maintenance** : Une mise à jour régulière de la bibliothèque `yfinance` est nécessaire.
 3. **Roadmap v2** : Envisager la migration vers une API officielle (AlphaVantage, FMP) pour la stabilité long-terme.
@@ -920,6 +943,7 @@ L'utilisation de `yfinance` présente un risque structurel car il s'agit d'un wr
 Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
 
 **Logic & Scoring (`tests/test_logic.py`) :**
+
 - `test_quality_logic()` : Vérifie le calcul du ROE, Dette/EBITDA (avec fallback FMP/yfinance) et les gates d'exclusion.
 - `test_valuation_logic()` : Vérifie les limites de P/E par secteur (80 pour Tech/Health, 50 ailleurs).
 - `test_momentum_logic()` : Vérifie le calcul des performances 3M/6M et le proxy de croissance CA.
@@ -929,6 +953,7 @@ Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
 - `test_sector_exceptions()` : Valide les exceptions pour les Financials (dette) et Biotechs (P/E).
 
 **Intégration & Fetcher (`tests/test_scoring_engine.py`) :**
+
 - `test_scoring()` : Test de bout en bout récupérant des données réelles (yfinance/FMP) pour valider le pipeline complet.
 
 ---
@@ -966,4 +991,4 @@ Le projet utilise `pytest` pour valider la logique métier. Les tests couvrent :
 ---
 
 _Document rédigé pour transmission à Claude (modèle de génération de code). Toutes les décisions d'architecture ont été prises pour maximiser la fiabilité des données et la maintenabilité du code, en tenant compte des contraintes de l'environnement Mac Mini local et des limites de l'API yfinance gratuite._
-_
+\_
