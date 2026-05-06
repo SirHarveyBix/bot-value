@@ -1,0 +1,28 @@
+# Versions épinglées pour stabilité sur Mac Mini
+
+# Données marché
+yfinance>=0.2.40,<0.3.0
+pandas>=2.1.0,<3.0.0
+numpy>=1.26.0,<2.0.0
+
+# Scheduling
+APScheduler>=3.10.0,<4.0.0
+pandas-market-calendars>=4.3.0
+
+# Alertes
+python-telegram-bot>=21.0,<22.0
+
+# Configuration
+PyYAML>=6.0.1,<7.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# Logging
+loguru>=0.7.2,<1.0.0
+
+# Utilitaires
+pytz>=2024.1
+requests>=2.31.0,<3.0.0
+
+# Tests
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

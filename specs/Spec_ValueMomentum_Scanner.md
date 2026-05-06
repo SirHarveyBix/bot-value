@@ -100,12 +100,23 @@ C'est une pondération qui se rapproche de ce que font les facteurs "Quality Mom
 Nom du projet    : ValueMomentum Scanner
 Version          : 1.0
 Horizon cible    : Signals pour positions 3 à 6 mois
-Fréquence        : Quotidienne (jours ouvrés US)
+Fréquence        : Quotidienne (jours de bourse US uniquement)
 Déclenchement    : 09h30 ET (après ouverture NYSE)
 Sortie principale : Alertes Telegram + fichier JSON historique
 Environnement    : Mac Mini (serveur local), macOS
 Langage          : Python 3.11+
 ```
+
+> **Jours de bourse vs jours ouvrés** : APScheduler déclenche sur `cron` lundi-vendredi mais ignore les jours fériés NYSE (Thanksgiving, Christmas, MLK Day, etc.). Avant chaque scan, vérifier via `pandas_market_calendars` :
+>
+> ```python
+> import pandas_market_calendars as mcal
+> nyse = mcal.get_calendar("NYSE")
+> schedule = nyse.schedule(start_date=today, end_date=today)
+> if schedule.empty:
+>     logger.info(f"Jour férié NYSE {today} — scan annulé")
+>     return
+> ```
 
 ---
 
@@ -192,6 +203,103 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 > **Note technique** : Le filtre volume se calcule comme `avg(volume_20j) × avg(close_20j)`. Ne pas utiliser le volume brut (actions) mais le volume en dollars.
 
+> **Application aux ETFs** : Les ETFs n'ont pas de données fondamentales au sens action (P/E, ROE, etc.). Le filtre "Données fondamentales" ne s'applique PAS aux ETFs — ils passent directement vers le pipeline ETF après les 5 premiers filtres (market cap, volume, prix, listing, ancienneté prix). Le filtre ancienneté utilise l'historique de prix (2 ans d'OHLCV), applicable aux ETFs.
+
+---
+
+## 3bis. Module 2 — Data Fetcher
+
+### 2.1 Stratégie de fetch
+
+**Fetch prix OHLCV (batch) :**
+
+```python
+# Un seul appel pour tous les tickers — évite le rate limiting
+prices = yf.download(
+    tickers=" ".join(all_tickers),
+    period="1y",
+    group_by="ticker",
+    auto_adjust=True,
+    threads=True,     # parallélisme interne yfinance
+    progress=False
+)
+```
+
+**Fetch fondamentaux (individuel avec cache) :**
+
+- `yf.Ticker(ticker).info` → données fondamentales (TTM)
+- `yf.Ticker(ticker).financials` → bilans annuels (pour ROE multi-année en v1.1)
+- `yf.Ticker(ticker).calendar` → earnings calendar
+
+### 2.2 Rate limiting et résilience
+
+```python
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 5
+INTER_REQUEST_DELAY = 0.5   # secondes entre appels individuels .info
+MAX_WORKERS = 8              # ThreadPoolExecutor pour fetch .info parallèle
+
+# Si HTTP 429 reçu : pause 60s avant reprise
+# Si HTTP 429 sur batch download : fallback vers fetch individuel
+```
+
+### 2.3 Validation des données reçues
+
+```python
+def is_valid_ticker_data(data: dict) -> bool:
+    price = data.get("regularMarketPrice")  # None-safe check
+    return price is not None and price > 0
+```
+
+> **Important** : `"regularMarketPrice" in data` est insuffisant — la clé peut exister avec valeur None. Toujours utiliser `.get()` + check de valeur.
+
+### 2.4 Cache
+
+```python
+CACHE_TTL_FUNDAMENTALS = 24 * 3600   # 24h — fondamentaux changent peu entre résultats
+CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
+```
+
+**Invalidation post-earnings** : si un ticker est dans l'earnings calendar avec date = J-1 (résultats publiés la veille), son cache fondamentaux est invalidé forcément avant le scan.
+
+**Structure cache entry :**
+
+```json
+{
+  "ticker": "MSFT",
+  "fetched_at": "2025-01-15T09:32:00Z",
+  "expires_at": "2025-01-16T09:32:00Z",
+  "data": { "...": "..." }
+}
+```
+
+### 2.5 Bootstrap tickers_universe.json
+
+Fichier créé une fois manuellement. Structure :
+
+```json
+{
+  "stocks": ["AAPL", "MSFT", "..."],
+  "etfs": ["XLK", "XLV", "SPY", "..."]
+}
+```
+
+**Sources pour la liste initiale :**
+
+- S&P 500 : Wikipedia `List of S&P 500 companies` (table HTML parseable via pandas)
+- Russell 1000 : disponible sur le site iShares (ETF IWB) — fichier CSV téléchargeable
+- ETFs : liste manuelle des SPDR sectoriels + ETFs thématiques majeurs
+
+Script de bootstrap suggéré (à exécuter une fois) :
+
+```python
+import pandas as pd
+sp500 = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]["Symbol"].tolist()
+# Sauvegarder dans tickers_universe.json
+```
+
+Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les entrants/sortants de l'indice.
+
 ---
 
 ## 4. Module 3 — Scoring Engine
@@ -200,12 +308,12 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 #### PILIER 1 : QUALITÉ (pondération 35%)
 
-| Métrique             | Donnée yfinance                          | Calcul                                        | Ranking            |
-| -------------------- | ---------------------------------------- | --------------------------------------------- | ------------------ |
-| ROE TTM              | `returnOnEquity`                         | Valeur directe (TTM — voir note)              | Cross-universe     |
-| Marge opérationnelle | `operatingMargins`                       | Valeur directe                                | Intra-secteur GICS |
-| Dette nette / EBITDA | `totalDebt`, `totalCash`, `ebitda`       | Calcul : (totalDebt - totalCash) / ebitda     | Cross-universe     |
-| FCF Yield proxy      | `freeCashflow`, `marketCap`              | freeCashflow / marketCap                      | Cross-universe     |
+| Métrique             | Donnée yfinance                    | Calcul                                    | Ranking            |
+| -------------------- | ---------------------------------- | ----------------------------------------- | ------------------ |
+| ROE TTM              | `returnOnEquity`                   | Valeur directe (TTM — voir note)          | Cross-universe     |
+| Marge opérationnelle | `operatingMargins`                 | Valeur directe                            | Intra-secteur GICS |
+| Dette nette / EBITDA | `totalDebt`, `totalCash`, `ebitda` | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
+| FCF Yield proxy      | `freeCashflow`, `marketCap`        | freeCashflow / marketCap                  | Cross-universe     |
 
 > **Note ROE** : `yfinance` retourne uniquement le ROE TTM via `returnOnEquity`. La moyenne 3 ans nécessite `ticker.financials` (3 bilans annuels) — complexité supplémentaire documentée dans le Module 2. En v1, ROE TTM est utilisé comme proxy. Si la stabilité du ROE est critique, v1.1 pourra ajouter la moyenne glissante.
 
@@ -236,8 +344,8 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 **Règles gates valorisation (filtres d'exclusion, non scorés) :**
 
-- P/E Forward > 50 → exclu sauf si secteur = Technology/Biotech (seuil 80)
-- P/E Forward négatif → exclu (pertes prévues)
+- P/E Forward > 50 → exclu sauf si secteur = Technology ou Health Care (inclut Biotech, seuil 80)
+- P/E Forward négatif → exclu (pertes prévues) — exception : si P/E Forward absent ET P/E TTM disponible, voir gestion données manquantes ci-dessous
 - EV/EBITDA > 40 → exclu
 
 **Score Valorisation** = moyenne pondérée des percentile rangs inversés (un P/E BAS = bon score)
@@ -246,18 +354,28 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 - EV/EBITDA inversé : 35%
 - PEG inversé : 20%
 
-> **Gestion données manquantes** : Si le P/E Forward n'est pas disponible pour un ticker, on utilise le P/E TTM avec une pénalité de -5 points sur le score final (données estimées moins fiables). Si aucun P/E n'est disponible, le critère valorisation est exclu et le score global est recalculé sur Qualité + Momentum uniquement, avec un flag `⚠️ Valorisation non calculée`.
+> **Gestion données manquantes** :
+>
+> - P/E Forward absent → utiliser P/E TTM avec pénalité de -5 points sur le **score pilier Valorisation** (pas le score global). Si P/E TTM aussi négatif → appliquer le gate P/E négatif normalement.
+> - Aucun P/E disponible → pilier Valorisation exclu. Score global recalculé : `score_qualite * 0.50 + score_momentum * 0.50` (renormalisé sur 100). Flag `⚠️ Valorisation non calculée` ajouté.
+> - PEG Ratio absent (fréquent) → critère PEG exclu du pilier. Les 20% sont redistribués : P/E Forward → 56%, EV/EBITDA → 44%.
+>
+> **Règle NaN dans percentile ranking** : tout sous-critère avec valeur NaN ou manquante est exclu du calcul du percentile pour ce ticker. Si plus de 2 sous-critères d'un pilier sont NaN, le pilier entier est exclu (voir logique de repondération ci-dessus).
 
 ---
 
 #### PILIER 3 : MOMENTUM (pondération 35%)
 
-| Métrique                      | Calcul                                         | Ranking        |
-| ----------------------------- | ---------------------------------------------- | -------------- |
-| Performance 6 mois            | (Prix J0 - Prix J-126) / Prix J-126            | Cross-universe |
-| Performance 3 mois            | (Prix J0 - Prix J-63) / Prix J-63              | Cross-universe |
-| Surperformance sectorielle 6M | Perf 6M ticker - Perf 6M ETF sectoriel SPDR    | Intra-secteur  |
-| Momentum de révision EPS      | Variation des estimations EPS 12M sur 90 jours | Cross-universe |
+| Métrique                      | Calcul                                                    | Ranking        |
+| ----------------------------- | --------------------------------------------------------- | -------------- |
+| Performance 6 mois            | (Prix J0 - Prix J-126) / Prix J-126                       | Cross-universe |
+| Performance 3 mois            | (Prix J0 - Prix J-63) / Prix J-63                         | Cross-universe |
+| Surperformance sectorielle 6M | Perf 6M ticker - Perf 6M ETF sectoriel SPDR               | Intra-secteur  |
+| Momentum révision EPS (proxy) | `earningsGrowth` (TTM yfinance) — voir note disponibilité | Cross-universe |
+
+> **Définition Prix J0** : close du dernier jour de bourse disponible avant le déclenchement du scan (= close J-1). À 09h30 ET, le marché vient d'ouvrir — les prix intraday ne sont pas utilisés. `yf.download(ticker, period="1d")["Close"].iloc[-1]` du jour précédent.
+
+> **Note momentum révision EPS** : l'historique des révisions de consensus analyste sur 90 jours n'est pas disponible via yfinance (donnée payante Refinitiv/Zacks). En v1, proxy = `earningsGrowth` TTM (variation bénéfices YoY). Signal imparfait mais disponible. En v2, intégrer Zacks ou Financial Modeling Prep API (gratuit jusqu'à 250 req/jour) pour les vraies révisions de consensus.
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
 
@@ -280,8 +398,11 @@ SECTOR_ETF_MAP = {
 
 **Ajustement anti-momentum extrême :**
 
+Les pénalités s'appliquent sur le **score momentum final** (après calcul de la moyenne pondérée des 4 sous-critères, avant intégration dans le score global). Le score momentum est clampé à [0, 100] après application des pénalités.
+
 - Si performance 1 mois > +25% → pénalité -10 points sur score momentum (probable mean reversion court terme)
 - Si performance 1 mois < -20% → pénalité -5 points (momentum négatif récent)
+- Les deux conditions peuvent s'appliquer simultanément (cumul des pénalités)
 
 **Score Momentum** = moyenne pondérée :
 
@@ -295,12 +416,21 @@ SECTOR_ETF_MAP = {
 ### 4.2 Score Global Actions
 
 ```python
+# Cas nominal (tous piliers disponibles)
 score_global = (
     score_qualite * 0.35 +
     score_valorisation * 0.30 +
     score_momentum * 0.35
 )
-# Résultat : float entre 0 et 100
+
+# Cas valorisation exclue (P/E et EV/EBITDA tous absents)
+score_global = (
+    score_qualite * 0.50 +
+    score_momentum * 0.50
+)
+
+# Résultat : float entre 0 et 100 dans tous les cas
+# Score momentum est clampé à [0, 100] avant intégration (voir pénalités anti-extrême)
 ```
 
 ---
@@ -309,13 +439,25 @@ score_global = (
 
 Pour les ETFs, seuls 3 critères sont calculés :
 
-| Critère            | Calcul                                       | Pondération |
-| ------------------ | -------------------------------------------- | ----------- |
-| Performance 6 mois | (Prix J0 - Prix J-126) / Prix J-126          | 40%         |
-| Surperf vs SPY 6M  | Perf 6M ETF - Perf 6M SPY                    | 35%         |
-| Trend AUM          | Variation encours sur 3 mois (si disponible) | 25%         |
+| Critère             | Calcul                                             | Pondération |
+| ------------------- | -------------------------------------------------- | ----------- |
+| Performance 6 mois  | (Prix J0 - Prix J-126) / Prix J-126                | 40%         |
+| Surperf vs SPY 6M   | Perf 6M ETF - Perf 6M SPY                          | 35%         |
+| Volume trend 3 mois | (vol*moy_20j - vol_moy_J-63*à_J-43) / vol_moy_hist | 25%         |
 
-> **Note** : L'AUM trend n'est pas disponible via yfinance. En v1, ce critère sera calculé comme proxy via le volume de transactions relatif (augmentation du volume moyen = flux entrants). En v2, on pourra intégrer l'API ETF.com ou VettaFi.
+> **Note AUM trend** : L'AUM réel n'est pas disponible via yfinance. Proxy v1 = variation du volume moyen 20j vs volume moyen 20j centré sur J-63 (3 mois passés). Ce proxy est bruité (volatilité augmente aussi le volume). Sa pondération est réduite à 25% pour limiter l'impact. En v2, intégrer VettaFi ou ETF.com pour AUM réel.
+
+### 4.4 Traitement spécifique des secteurs atypiques
+
+Certains secteurs ont des structures financières incompatibles avec les métriques standard :
+
+| Secteur GICS | Problème                                        | Traitement v1                                                                             |
+| ------------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Financials   | Passif = dépôts clients, pas de dette "normale" | Exclure dette/EBITDA du calcul. Pilier Qualité sur 3 critères (ROE, marge op., FCF yield) |
+| Real Estate  | FFO ≠ earnings GAAP, EBITDA non standard        | Idem Financials : exclure dette/EBITDA                                                    |
+| Health Care  | Biotechs pré-revenus : P/E négatif systématique | Gate P/E négatif suspendu si secteur = Health Care ET marketCap < 5B$                     |
+
+> Ces exceptions s'appliquent automatiquement via le champ `sector` yfinance. Elles doivent être loggées explicitement dans les exclusions pour auditabilité.
 
 ---
 
@@ -338,18 +480,20 @@ data_freshness_check():
 ```
 earnings_calendar_check():
     Pour chaque ticker dans le top 20 :
-        Récupérer prochaine date de résultats via yfinance
-        Si date dans [J-3, J+14] :
+        Récupérer prochaine date de résultats via yfinance.Ticker.calendar
+        Si date dans [J0, J+14] (de aujourd'hui jusqu'à dans 14 jours) :
             Ajouter tag "📅 Earnings à venir : [DATE]"
             NE PAS exclure — c'est une information, pas un filtre
 ```
+
+> **Note** : La fenêtre est [J0, J+14] uniquement (regarder vers le futur). J-3 (après résultats) supprimé — le risque est avant les résultats, pas après. Les dates de résultats yfinance sont parfois imprécises (±1-2 jours) — le tag est informatif, pas actionnable seul.
 
 ### 5.3 Diversification forcée
 
 Pour éviter que le top 10 soit dominé par un seul secteur :
 
 - Maximum 3 tickers du même secteur GICS dans le top 10
-- Si un secteur dépasse 3 représentants, le 4ème est remplacé par le meilleur ticker du secteur suivant
+- Si un secteur dépasse 3 représentants, le 4ème est remplacé par le meilleur ticker hors top 10 actuel n'appartenant pas aux secteurs déjà au plafond (tri décroissant par score global sur le reste de la liste)
 
 ### 5.4 Output final
 
@@ -447,6 +591,34 @@ telegram:
   parse_mode: "HTML"
   disable_web_page_preview: true
 ```
+
+### 6.5 HTML escaping obligatoire
+
+`parse_mode: "HTML"` impose d'échapper les caractères spéciaux dans les noms d'entreprises et tickers avant envoi. Tickers courants affectés : `AT&T` ($T), `Johnson & Johnson` ($JNJ), noms contenant `<`, `>`, `&`.
+
+```python
+import html
+
+def escape_html(text: str) -> str:
+    return html.escape(str(text))
+
+# Appliquer sur : nom entreprise, secteur, toute donnée string dans le message
+```
+
+### 6.6 Rate limiting Telegram
+
+Telegram limite les messages à **1 message/seconde** pour un même chat. Le top 10 génère potentiellement 10+ messages.
+
+```python
+import asyncio
+
+async def send_signals(tickers: list):
+    for ticker_data in tickers:
+        await bot.send_message(chat_id=CHAT_ID, text=format_message(ticker_data), parse_mode="HTML")
+        await asyncio.sleep(1.1)  # légèrement au-dessus de 1s pour marge
+```
+
+> **Architecture async** : `python-telegram-bot==21.x` est async-first (asyncio). Le scheduler APScheduler 3.x est synchrone — utiliser `asyncio.run()` pour exécuter les coroutines Telegram depuis le job scheduler. Alternativement, migrer vers APScheduler 4.x (natif async) en v1.1.
 
 ---
 
@@ -593,35 +765,47 @@ valuemomentum-scanner/
 
 ## 10. Stack technique et dépendances
 
-```python
+```
 # requirements.txt
+# Versions épinglées — mettre à jour explicitement, pas de wildcards pip
 
 # Données marché
-yfinance==0.2.x             # Données OHLCV et fondamentaux
-pandas==2.x                  # Traitement données
-numpy==1.x                   # Calculs numériques
+yfinance>=0.2.40,<0.3.0
+pandas>=2.1.0,<3.0.0
+numpy>=1.26.0,<2.0.0          # >= 1.26 requis par pandas 2.x
 
 # Scheduling
-APScheduler==3.x             # Déclenchement quotidien 09h30 ET
+APScheduler>=3.10.0,<4.0.0    # 3.x = synchrone, compatible avec asyncio.run()
+pandas-market-calendars>=4.3.0 # Calendrier trading US — exclure jours fériés NYSE
 
 # Alertes
-python-telegram-bot==21.x   # API Telegram (async)
+python-telegram-bot>=21.0,<22.0   # API async-first (asyncio)
 
 # Configuration
-PyYAML==6.x                  # Lecture config.yaml
-python-dotenv==1.x           # Chargement .env
+PyYAML>=6.0.1,<7.0.0
+python-dotenv>=1.0.0,<2.0.0
 
 # Logging
-loguru==0.7.x                # Logging structuré (remplace logging standard)
+loguru>=0.7.2,<1.0.0
 
 # Utilitaires
-pytz==2024.x                  # Gestion fuseaux horaires (ET pour NYSE)
-requests==2.x                # HTTP fallback
+pytz>=2024.1                   # Requis par APScheduler 3.x
+requests>=2.31.0,<3.0.0
 
 # Tests
-pytest==8.x
-pytest-asyncio
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
 ```
+
+> **Note async** : `python-telegram-bot 21.x` est async. APScheduler 3.x est sync. Pattern d'intégration dans `main.py` :
+>
+> ```python
+> def run_scan_job():
+>     asyncio.run(scan_and_notify())  # asyncio.run() crée un event loop frais
+> scheduler.add_job(run_scan_job, "cron", hour=9, minute=30, timezone="America/New_York")
+> ```
+>
+> Ne pas réutiliser un event loop entre jobs — `asyncio.run()` crée et ferme le sien à chaque appel.
 
 ---
 
@@ -755,7 +939,7 @@ def fetch_with_retry(ticker: str) -> dict:
     for attempt in range(MAX_RETRIES):
         try:
             data = yf.Ticker(ticker).info
-            if data and "regularMarketPrice" in data:
+            if data and data.get("regularMarketPrice") is not None:  # None-safe check
                 return data
         except Exception as e:
             if attempt == MAX_RETRIES - 1:

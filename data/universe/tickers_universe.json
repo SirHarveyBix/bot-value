@@ -1,0 +1,11 @@
+{
+  "stocks": [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "BRK-B", "JPM", "V",
+    "JNJ", "WMT", "PG", "MA", "UNH", "HD", "DIS", "BAC", "VZ", "KO",
+    "INTC", "CSCO", "CMCSA", "PFE", "NFLX", "ADBE", "T", "ABT", "PEP", "CRM",
+    "PYPL", "COST", "ORCL", "NKE", "ABBV", "CVX", "XOM", "ACN", "MCD", "DHR"
+  ],
+  "etfs": [
+    "XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "XLU", "XLC", "SPY"
+  ]
+}
