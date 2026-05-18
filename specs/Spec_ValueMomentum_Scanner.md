@@ -109,7 +109,7 @@ Langage          : Python 3.11+
 
 ### Synthèse de l'Horizon de Trading
 
-Le bot est conçu pour le **Position Trading**. Contrairement à l'Intraday (scalping, day trading) ou au Swing Trading classique (quelques jours), cette stratégie vise à capturer des tendances de fond sur plusieurs **trimestres**. 
+Le bot est conçu pour le **Position Trading**. Contrairement à l'Intraday (scalping, day trading) ou au Swing Trading classique (quelques jours), cette stratégie vise à capturer des tendances de fond sur plusieurs **trimestres**.
 - **Style** : "Buy and Hold" dynamique.
 - **Vecteur de temps** : On ne cherche pas le profit immédiat, mais la convergence de la Qualité fondamentale et du Momentum de prix.
 - **Rotation** : Le portefeuille est réévalué quotidiennement mais la rotation réelle des titres s'effectue généralement tous les 3 à 6 mois.
@@ -150,16 +150,16 @@ Pour maximiser l'univers tout en garantissant la qualité institutionnelle des s
 
 > **Contrainte FMP free tier (250 calls/jour) — CRITIQUE** : Le tier gratuit FMP est **limité à 250 appels/jour**, sans possibilité d'upgrade. Budget alloué par run :
 >
-> | Endpoint FMP | Appels (30 tickers) | Objet |
-> |---|---|---|
-> | `ratios-ttm/{symbol}` | 30 | P/E, EV/EBITDA, marge op., FCF yield, dette/EBITDA |
-> | `key-metrics-ttm/{symbol}` | 30 | ROE TTM, métriques complémentaires |
-> | `profile/{symbol}` | 30 | Secteur GICS, market cap, description |
-> | `income-statement/{symbol}?limit=3` | 30 | ROE moyen 3 ans (annuels) |
-> | `balance-sheet-statement/{symbol}?limit=1` | 30 | Bilan : totalDebt, totalCash |
-> | `earnings-surprises/{symbol}` | 30 | Surprise Earnings % |
-> | `analyst-estimates/{symbol}` | 30 | Révision estimations analystes 3M |
-> | **Total** | **210 calls/run** | Marge : 40 calls pour retries ciblés |
+> | Endpoint FMP                               | Appels (30 tickers) | Objet                                              |
+> | ------------------------------------------ | ------------------- | -------------------------------------------------- |
+> | `ratios-ttm/{symbol}`                      | 30                  | P/E, EV/EBITDA, marge op., FCF yield, dette/EBITDA |
+> | `key-metrics-ttm/{symbol}`                 | 30                  | ROE TTM, métriques complémentaires                 |
+> | `profile/{symbol}`                         | 30                  | Secteur GICS, market cap, description              |
+> | `income-statement/{symbol}?limit=3`        | 30                  | ROE moyen 3 ans (annuels)                          |
+> | `balance-sheet-statement/{symbol}?limit=1` | 30                  | Bilan : totalDebt, totalCash                       |
+> | `earnings-surprises/{symbol}`              | 30                  | Surprise Earnings %                                |
+> | `analyst-estimates/{symbol}`               | 30                  | Révision estimations analystes 3M                  |
+> | **Total**                                  | **210 calls/run**   | Marge : 40 calls pour retries ciblés               |
 >
 > **SHORTLIST_SIZE = 30 est non négociable** : 30 × 7 endpoints = 210 calls nominaux. Avec cache 24h actif sur les tickers non-earnings, les retries ne concernent qu'une minorité. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag, pas de 3ème tentative. Budget réel estimé : 210 calls nominaux + ~15 retries = 225 calls/run. Ne pas dépasser 30 tickers sans audit budget préalable.
 >
@@ -301,18 +301,19 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 ## 4. Module 3 — Scoring Engine
 
 ### 4.0 Filtre de Régime (Market Gate) — PRIORITÉ SURVIE
+
 Pour éviter l'effet de "Whipsaw" (oscillations autour d'une moyenne simple), le système utilise un double filtre de stress à **trois niveaux** :
 
 - **Indicateurs** : Moyenne Mobile Exponentielle 200 jours (EMA 200) du SPY + Indice de Volatilité (VIX).
 
 Les conditions sont évaluées **dans l'ordre de priorité suivant** (first match wins) :
 
-| Priorité | Condition | Régime | Comportement |
-|---|---|---|---|
-| 1 | VIX > 35 (quelle que soit la position SPY/EMA200) | **Panique** | Scan annulé + alerte Telegram `🚨 RÉGIME DE PANIQUE : EXPOSITION DÉCONSEILLÉE` |
-| 2 | SPY < EMA200 **ET** VIX entre 25 et 35 | **Prudence** | Scan complet + flag `⚠️ RÉGIME DE PRUDENCE : VOLATILITÉ ÉLEVÉE` sur chaque signal |
-| 3 | SPY < EMA200 **ET** VIX ≤ 25 | **Bear Light** | Scan normal + log warning interne uniquement (pas de flag sur les signaux Telegram) |
-| 4 | SPY ≥ EMA200 **ET** VIX ≤ 25 | **Normal** | Scan complet, Top 10 émis normalement |
+| Priorité | Condition                                         | Régime         | Comportement                                                                        |
+| -------- | ------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
+| 1        | VIX > 35 (quelle que soit la position SPY/EMA200) | **Panique**    | Scan annulé + alerte Telegram `🚨 RÉGIME DE PANIQUE : EXPOSITION DÉCONSEILLÉE`      |
+| 2        | SPY < EMA200 **ET** VIX entre 25 et 35            | **Prudence**   | Scan complet + flag `⚠️ RÉGIME DE PRUDENCE : VOLATILITÉ ÉLEVÉE` sur chaque signal   |
+| 3        | SPY < EMA200 **ET** VIX ≤ 25                      | **Bear Light** | Scan normal + log warning interne uniquement (pas de flag sur les signaux Telegram) |
+| 4        | SPY ≥ EMA200 **ET** VIX ≤ 25                      | **Normal**     | Scan complet, Top 10 émis normalement                                               |
 
 > **Pourquoi VIX > 35 déclenche la Panique quelle que soit la position du SPY** : L'EMA200 réagit avec un lag de plusieurs semaines. Début de crise (mars 2020 J+1 à J+7), le VIX était déjà à 40-80 alors que le SPY était encore au-dessus de son EMA200. Sans priorité sur le VIX, le bot émettrait des signaux "Normal" pendant un choc de volatilité extrême. Le VIX est le signal avancé de panique, l'EMA200 est le signal retardé de tendance — le VIX prévaut.
 >
@@ -320,17 +321,16 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 >
 > **Scan annulé en mode Panique** : la table `scans` en SQLite reçoit quand même une entrée avec `regime='panic'`. La table `signals` ne reçoit aucune entrée. Le Telegram envoie uniquement le message d'alerte de panique (voir section 6.3).
 
-
 ### 4.1 Pipeline Actions : définition des critères
 
 #### PILIER 1 : QUALITÉ (pondération 35%)
 
-| Métrique             | Source                             | Calcul                                    | Ranking            |
-| -------------------- | ---------------------------------- | ----------------------------------------- | ------------------ |
-| ROE (Moyenne 3 ans)  | API FMP (Sniper)                   | Moyenne du ROE sur les 3 derniers bilans  | Cross-universe     |
-| Marge opérationnelle | yfinance / FMP                     | Valeur directe                            | Intra-secteur GICS |
-| Dette nette / EBITDA | yfinance / FMP                     | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
-| FCF Yield proxy      | yfinance / FMP                     | freeCashflow / marketCap                  | Cross-universe     |
+| Métrique             | Source           | Calcul                                    | Ranking            |
+| -------------------- | ---------------- | ----------------------------------------- | ------------------ |
+| ROE (Moyenne 3 ans)  | API FMP (Sniper) | Moyenne du ROE sur les 3 derniers bilans  | Cross-universe     |
+| Marge opérationnelle | yfinance / FMP   | Valeur directe                            | Intra-secteur GICS |
+| Dette nette / EBITDA | yfinance / FMP   | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
+| FCF Yield proxy      | yfinance / FMP   | freeCashflow / marketCap                  | Cross-universe     |
 
 > **Note ROE** : L'utilisation du ROE TTM est proscrite car potentiellement faussée par des effets de levier ou des cessions exceptionnelles. Le calcul moyen sur 3 ans est **obligatoire** et récupéré via les endpoints `income-statement` et `balance-sheet-statement` de l'API FMP.
 
@@ -389,19 +389,21 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 
 #### PILIER 3 : MOMENTUM (pondération 35%)
 
-| Métrique                           | Calcul                                         | Source  | Ranking        |
-| ---------------------------------- | ---------------------------------------------- | ------- | -------------- |
-| Performance 6 mois                 | (Prix J0 - Prix J-126) / Prix J-126            | yfinance | Cross-universe |
-| Surperformance sectorielle 6M      | Perf 6M ticker - Perf 6M ETF sectoriel SPDR    | yfinance | Intra-secteur  |
-| Performance 3 mois                 | (Prix J0 - Prix J-63) / Prix J-63              | yfinance | Cross-universe |
-| Surprise Earnings % (Sniper)       | (BPA Publié - BPA Attendu) / BPA Attendu       | FMP `earnings-surprises` | Cross-universe |
-| Révision estimations analystes 3M  | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates` | Cross-universe |
+| Métrique                          | Calcul                                            | Source                   | Ranking        |
+| --------------------------------- | ------------------------------------------------- | ------------------------ | -------------- |
+| Performance 6 mois                | (Prix J0 - Prix J-126) / Prix J-126               | yfinance                 | Cross-universe |
+| Surperformance sectorielle 6M     | Perf 6M ticker - Perf 6M ETF sectoriel SPDR       | yfinance                 | Intra-secteur  |
+| Performance 3 mois                | (Prix J0 - Prix J-63) / Prix J-63                 | yfinance                 | Cross-universe |
+| Surprise Earnings % (Sniper)      | (BPA Publié - BPA Attendu) / BPA Attendu          | FMP `earnings-surprises` | Cross-universe |
+| Révision estimations analystes 3M | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates`  | Cross-universe |
 
 > **Note Momentum Fondamental** : Deux signaux fondamentaux complémentaires :
+>
 > - **Surprise Earnings %** (backward) : la dernière publication a-t-elle battu les attentes ? Signal fort immédiatement post-résultats, décroissant avec le temps (voir formule ci-dessous).
 > - **Révision estimations 3M** (forward) : les analystes ont-ils révisé leurs estimations de BPA à la hausse sur les 3 derniers mois ? Signal d'accélération fondamentale anticipée, stable dans le temps. Calcul : `(median_eps_estimate_now - median_eps_estimate_3M_ago) / abs(median_eps_estimate_3M_ago)`.
 >
 > **Décroissance temporelle du signal Earnings Surprise** : Une surprise positive enregistrée il y a 90 jours est déjà intégrée dans le prix. Le poids de ce critère décroît linéairement, et les poids libérés sont redistribués proportionnellement aux 4 autres critères :
+>
 > ```python
 > days_since_earnings = (today - last_earnings_date).days
 > surprise_weight = 0.15 * max(0.0, 1.0 - (days_since_earnings / 90))
@@ -417,6 +419,7 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 > w_revision   = 0.10 * factor
 > # Vérification : w_perf_6m + w_outperf_6m + w_perf_3m + w_revision + surprise_weight = 1.0
 > ```
+>
 > **Pourquoi** : Sans cette décroissance, une entreprise ayant battu les attentes en octobre continue d'être récompensée en janvier pour un signal dont le marché a déjà fait le prix. La Révision estimations n'a pas de décroissance — les révisions d'analystes reflètent une conviction continue, pas un événement ponctuel.
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
@@ -510,11 +513,11 @@ def is_eligible_etf(ticker: str, name: str) -> bool:
 
 Certains secteurs ont des structures financières incompatibles avec les métriques standard :
 
-| Secteur GICS | Problème                                        | Traitement v1                                                                             |
-| ------------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Financials   | Passif = dépôts clients, pas de dette "normale" | Exclure dette/EBITDA du calcul. Pilier Qualité sur 3 critères (ROE, marge op., FCF yield) |
-| Real Estate  | FFO ≠ earnings GAAP, EBITDA non standard        | Idem Financials : exclure dette/EBITDA                                                    |
-| Health Care  | Biotechs pré-revenus : P/E négatif systématique | Gate P/E négatif suspendu si secteur = Health Care ET marketCap < 5B$                     |
+| Secteur GICS  | Problème                                                                      | Traitement v1                                                                                 |
+| ------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Financials    | Passif = dépôts clients, pas de dette "normale"                               | Exclure dette/EBITDA du calcul. Pilier Qualité sur 3 critères (ROE, marge op., FCF yield)     |
+| Real Estate   | FFO ≠ earnings GAAP, EBITDA non standard                                      | Idem Financials : exclure dette/EBITDA                                                        |
+| Health Care   | Biotechs pré-revenus : P/E négatif systématique                               | Gate P/E négatif suspendu si secteur = Health Care ET marketCap < 5B$                         |
 | **Utilities** | **Levier structurel élevé (monopole réglementé, financement infrastructure)** | **Exclure dette/EBITDA du calcul. Pilier Qualité sur 3 critères (ROE, marge op., FCF yield)** |
 
 > Ces exceptions s'appliquent automatiquement via le champ `sector` yfinance. Elles doivent être loggées explicitement dans les exclusions pour auditabilité.
@@ -551,7 +554,9 @@ earnings_calendar_check():
 > **Note** : La fenêtre est [J0, J+14] uniquement (regarder vers le futur). J-3 (après résultats) supprimé — le risque est avant les résultats, pas après. Les dates de résultats yfinance sont parfois imprécises (±1-2 jours) — le tag est informatif, pas actionnable seul.
 
 ### 5.3 Concentration Sectorielle (Paramétrable)
+
 Pour équilibrer la capture d'Alpha pur et la gestion du risque, la limite de tickers par secteur est désormais configurable :
+
 - **Paramètre** : `max_tickers_per_sector` (défaut : 3).
 - **Mode Alpha Pur** : Fixer à 10 pour autoriser un Top 10 concentré sur un seul secteur leader.
 - **Mode Défensif** : Fixer à 3 (par défaut) pour forcer une diversification et réduire le drawdown sectoriel.
@@ -643,6 +648,7 @@ Score : [X]/100 | Perf 6M : [+/-X%] vs SPY [+/-X%]
 ### 6.3 Messages système (Panique / Erreur / FMP indisponible)
 
 **Régime Panique (VIX > 35) :**
+
 ```
 🚨 ValueMomentum Scanner — [DATE]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -654,6 +660,7 @@ SPY : [PRIX] | EMA200 : [EMA200] | VIX : [VIX]
 ```
 
 **FMP Sniper indisponible :**
+
 ```
 ⚠️ ValueMomentum Scanner — [DATE]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -664,6 +671,7 @@ Cause : [MESSAGE_COURT]
 ```
 
 **Erreur technique (scan échoue) :**
+
 ```
 🚨 ValueMomentum Scanner — ERREUR [DATE]
 Le scan quotidien a rencontré une erreur.
@@ -732,6 +740,7 @@ def truncate_message(text: str) -> str:
 ## 7. Module 6 — Storage & History (SQLite)
 
 ### 7.1 Stratégie de stockage
+
 Le stockage repose sur une base de données **SQLite** (`data/signals/scanner_history.db`). Pour supporter les accès concurrents sans verrouillage (Bot en écriture + Dashboard en lecture), le mode **WAL (Write-Ahead Logging)** est activé (`PRAGMA journal_mode=WAL;`).
 
 ### 7.2 Structure de la base de données (SQLite)
@@ -784,6 +793,7 @@ async def update_signal_returns():
 ```
 
 ### 7.3 Cache & Univers (JSON)
+
 Les fichiers JSON sont conservés uniquement pour le cache temporaire et la gestion de l'univers de départ.
 
 ---
@@ -791,7 +801,9 @@ Les fichiers JSON sont conservés uniquement pour le cache temporaire et la gest
 ## 8. Interface HTML (v1.0 Statique / v1.1 Dynamique)
 
 ### 8.1 Approche v1.0
+
 Une page HTML statique interrogeant un export JSON temporaire généré depuis la base **SQLite**.
+
 - **Stack** : Vanilla JS + http.server.
 
 ### 8.2 Transition v1.1 (Roadmap)
@@ -1042,6 +1054,7 @@ L'utilisation de `yfinance` présente un risque structurel car il s'agit d'un wr
 ## 14. Stratégie de Test et Assurance Qualité
 
 ### 14.1 Protocoles de Test Hermétiques (Obligatoires)
+
 Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API (FMP 250/jour) ni dépendre de la stabilité du réseau, le système impose l'isolation totale :
 
 - **VCR.py (Isolation Réseau)** : Les tests d'intégration enregistrent les requêtes réelles dans des "cassettes" YAML. Les exécutions suivantes rejouent ces cassettes, garantissant un déterminisme total et une consommation API nulle.
@@ -1049,6 +1062,7 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 - **Mocks & Fixtures** : La logique mathématique pure (Scoring) est testée via des objets Mock pré-remplis pour éviter tout effet de bord.
 
 ### 14.2 Structure de la Suite
+
 - `tests/test_logic.py` : Calculs (ROE, Surprise, Pénalités) sur données statiques.
 - `tests/test_fetcher_vcr.py` : Validation des connecteurs yfinance/FMP via cassettes.
 - `tests/test_integration_vcr.py` : Pipeline complet (EMA 200, VIX, Scoring, SQLite) simulé avec VCR et Freezegun.
@@ -1095,22 +1109,22 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 
 Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de référence, plages valides et section source :
 
-| Constante | Valeur par défaut | Plage valide | Section spec |
-|---|---|---|---|
-| `SHORTLIST_SIZE` | 30 | [20, 30] — **ne pas dépasser 30** sans audit budget FMP | §2 |
-| `VIX_PANIC_THRESHOLD` | 35 | [30, 45] | §4.0 |
-| `VIX_WARNING_THRESHOLD` | 25 | [20, 30] | §4.0 |
-| `MAX_TICKERS_PER_SECTOR` | 3 | [1, 10] — 10 = mode alpha pur (risque concentration) | §5.3 |
-| `DATA_FRESHNESS_WARNING_DAYS` | 120 | [60, 150] | §5.1 |
-| `DATA_FRESHNESS_EXCLUSION_DAYS` | 180 | [120, 365] | §5.1 |
-| `MAX_WORKERS_UNIVERSE` | 4 | [2, 6] — au-delà de 6, risque ban IP yfinance | §3.2 |
-| `INTER_REQUEST_DELAY` | 1.0s | [0.5, 2.0] | §3bis.2.1 |
-| `FMP_MAX_RETRIES` | 2 | [1, 3] — **2 max** pour tenir dans le budget 250 calls | §2 |
-| `CACHE_TTL_FUNDAMENTALS` | 86400s (24h) | [43200, 172800] | §3bis.2.4 |
-| `CACHE_TTL_PRICE_HISTORY` | 14400s (4h) | [3600, 86400] | §3bis.2.4 |
-| `EARNINGS_WINDOW_DAYS` | 14 | [7, 21] | §5.2 |
-| `MIN_UNIVERSE_SIZE` | 100 | [50, 200] — en dessous : percentile ranking invalide, scan annulé | §4 |
-| `TELEGRAM_MAX_CHARS` | 4096 | fixe (limite API) | §6.6 |
+| Constante                       | Valeur par défaut | Plage valide                                                      | Section spec |
+| ------------------------------- | ----------------- | ----------------------------------------------------------------- | ------------ |
+| `SHORTLIST_SIZE`                | 30                | [20, 30] — **ne pas dépasser 30** sans audit budget FMP           | §2           |
+| `VIX_PANIC_THRESHOLD`           | 35                | [30, 45]                                                          | §4.0         |
+| `VIX_WARNING_THRESHOLD`         | 25                | [20, 30]                                                          | §4.0         |
+| `MAX_TICKERS_PER_SECTOR`        | 3                 | [1, 10] — 10 = mode alpha pur (risque concentration)              | §5.3         |
+| `DATA_FRESHNESS_WARNING_DAYS`   | 120               | [60, 150]                                                         | §5.1         |
+| `DATA_FRESHNESS_EXCLUSION_DAYS` | 180               | [120, 365]                                                        | §5.1         |
+| `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                     | §3.2         |
+| `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                        | §3bis.2.1    |
+| `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le budget 250 calls            | §2           |
+| `CACHE_TTL_FUNDAMENTALS`        | 86400s (24h)      | [43200, 172800]                                                   | §3bis.2.4    |
+| `CACHE_TTL_PRICE_HISTORY`       | 14400s (4h)       | [3600, 86400]                                                     | §3bis.2.4    |
+| `EARNINGS_WINDOW_DAYS`          | 14                | [7, 21]                                                           | §5.2         |
+| `MIN_UNIVERSE_SIZE`             | 100               | [50, 200] — en dessous : percentile ranking invalide, scan annulé | §4           |
+| `TELEGRAM_MAX_CHARS`            | 4096              | fixe (limite API)                                                 | §6.6         |
 
 > **Règle de modification** : Toute modification d'une constante doit être accompagnée d'une note datée dans ce tableau (`[YYYY-MM-DD] Modifié X → Y — raison : ...`). La spec et le code doivent rester synchrones.
 
