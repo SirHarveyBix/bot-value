@@ -1,3 +1,5 @@
+from datetime import date as _date
+
 import numpy as np
 import pandas as pd
 
@@ -9,15 +11,12 @@ from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation
 
 def compute_percentile_ranks(df, column, ascending=True):
     """Calcule le percentile rank (0-100) pour une colonne."""
-    # Si df est en fait une série (via transform), on l'utilise directement
     if isinstance(df, pd.Series):
         if df.isnull().all():
             return pd.Series(index=df.index, data=np.nan)
         return df.rank(pct=True, ascending=ascending) * 100
 
-    # Si df est un DataFrame
     if column not in df.columns:
-        # Fallback si le DataFrame n'a qu'une colonne (cas fréquent en transform)
         if len(df.columns) == 1:
             return df.iloc[:, 0].rank(pct=True, ascending=ascending) * 100
         return pd.Series(index=df.index, data=np.nan)
@@ -26,54 +25,64 @@ def compute_percentile_ranks(df, column, ascending=True):
         return pd.Series(index=df.index, data=np.nan)
     return df[column].rank(pct=True, ascending=ascending) * 100
 
+
+def compute_momentum_weights(surprise_date: str | None, base_weights: dict, today: _date) -> dict:
+    """Calcule les poids momentum avec décroissance linéaire earnings surprise sur 90j (Lacune 6)."""
+    w = base_weights.copy()
+    if surprise_date:
+        days_since = (today - _date.fromisoformat(surprise_date)).days
+        effective_surprise = w["surprise_earnings"] * max(0.0, 1.0 - days_since / 90)
+    else:
+        effective_surprise = 0.0
+    freed = w["surprise_earnings"] - effective_surprise
+    w["surprise_earnings"] = effective_surprise
+    if freed > 0:
+        others = {k: v for k, v in w.items() if k != "surprise_earnings"}
+        total_others = sum(others.values())
+        for k in others:
+            w[k] += freed * (w[k] / total_others)
+    return w
+
+
 def momentum_screening_pipeline(price_data, symbols):
     """Pipeline initial pour filtrer les tickers par momentum pur."""
     rows = []
-    # Fetch SPY for relative performance benchmark
-    spy_prices = price_data["SPY"] if "SPY" in price_data.columns.levels[0] else None
 
     for symbol in symbols:
-        # Extraire les prix du batch
         prices = None
         if isinstance(price_data.columns, pd.MultiIndex):
             if symbol in price_data.columns.levels[0]:
                 prices = price_data[symbol]
-        
+
         if prices is None or len(prices) < 126:
             continue
 
-        # Calcul momentum simplifié (Section 4.1)
-        m_metrics = calculate_momentum_metrics(prices, {}, None) # Pas de secteur à ce stade
-        
+        m_metrics = calculate_momentum_metrics(prices, {}, None)
+
         rows.append({
             "symbol": symbol,
             "perf_6m": m_metrics.get("perf_6m", 0),
             "perf_3m": m_metrics.get("perf_3m", 0)
         })
-    
+
     if not rows:
         return pd.DataFrame()
-    
+
     df = pd.DataFrame(rows)
-    # Score momentum rapide : 60% Perf 6M + 40% Perf 3M
     df["m_score"] = df["perf_6m"] * 0.6 + df["perf_3m"] * 0.4
     return df.sort_values("m_score", ascending=False)
 
+
 def compute_valuation_score(row):
     vw = CONFIG["scoring"]["valuation_subweights"]
-    
-    # Compter les NaNs dans le pilier valorisation
-    # (pe est garanti présent si v_ok=True, mais vérifions quand même)
+
     v_ranks = [row["rank_pe"], row["rank_ev_ebitda"], row["rank_peg"]]
     nan_count = sum(1 for r in v_ranks if pd.isna(r))
-    
+
     if nan_count >= 2:
-        # Si plus de 2 critères sur 3 sont NaN, on invalide le pilier
         return None, False
 
-    # Redistribution du poids si PEG est manquant (Section 4.1)
     if pd.isna(row["rank_peg"]):
-        # P/E Forward -> 56%, EV/EBITDA -> 44%
         v_score = (row["rank_pe"] or 0) * 0.56 + (row["rank_ev_ebitda"] or 0) * 0.44
     else:
         v_score = (
@@ -81,11 +90,10 @@ def compute_valuation_score(row):
             (row["rank_ev_ebitda"] or 0) * vw["ev_ebitda"] +
             (row["rank_peg"] or 0) * vw["peg"]
         )
-    
-    # Pénalité P/E TTM (Section 4.1)
+
     if pd.notna(row.get("pe_flag")):
         v_score -= 5
-        
+
     return max(0, v_score), True
 
 
@@ -100,10 +108,14 @@ def stock_scoring_pipeline(all_data, symbols):
         info = data["info"]
         prices = data["prices"]
 
+        # T022: Exclusion sector=None (Lacune 7)
+        if info.get("sector") is None:
+            logger.warning(f"Exclusion {symbol}: sector=None (sector_missing)")
+            continue
+
         q_metrics = calculate_quality_metrics(info)
         v_metrics = calculate_valuation_metrics(info)
 
-        # Récupérer l'ETF sectoriel
         sector = v_metrics.get("sector")
         s_etf = SECTOR_ETF_MAP.get(sector, "SPY")
         s_data = all_data.get(s_etf, {}).get("prices")
@@ -116,7 +128,7 @@ def stock_scoring_pipeline(all_data, symbols):
         if not q_ok:
             logger.debug(f"Exclusion {symbol} (Qualité): {q_reason}")
             continue
-        
+
         if v_excluded:
             logger.debug(f"Exclusion {symbol} (Valorisation): {v_reason}")
             continue
@@ -126,11 +138,13 @@ def stock_scoring_pipeline(all_data, symbols):
             "name": info.get("longName", symbol),
             "sector": sector,
             "mcap_b": info.get("marketCap", 0) / 1e9 if info.get("marketCap") else 0,
+            "surprise_date": info.get("surprise_date"),
+            "analyst_revision_3m": info.get("analyst_revision_3m"),
             **q_metrics,
             **v_metrics,
             **m_metrics,
             "v_ok": v_ok,
-            "pe_flag": v_metrics.get("pe_flag")
+            "pe_flag": v_metrics.get("pe_flag"),
         }
         rows.append(row)
 
@@ -139,7 +153,13 @@ def stock_scoring_pipeline(all_data, symbols):
 
     df = pd.DataFrame(rows)
 
-    # Ranking
+    # T023: MIN_UNIVERSE_SIZE check avant percentile ranking (Lacune 8)
+    min_size = CONFIG["scanner"]["min_universe_size"]
+    if len(df) < min_size:
+        logger.warning(f"universe_too_small ({len(df)} tickers)")
+        return pd.DataFrame()
+
+    # Ranking intra-secteur
     df["rank_roe"] = compute_percentile_ranks(df, "roe")
     df["rank_margin"] = df.groupby("sector")["margin"].transform(
         compute_percentile_ranks, column="margin"
@@ -157,29 +177,54 @@ def stock_scoring_pipeline(all_data, symbols):
     df["rank_outperf_6m"] = compute_percentile_ranks(df, "outperf_6m")
     df["rank_perf_3m"] = compute_percentile_ranks(df, "perf_3m")
     df["rank_surprise"] = compute_percentile_ranks(df, "surprise_pct")
+    df["rank_analyst_revision"] = compute_percentile_ranks(df, "analyst_revision_3m")
 
-    # Scores
+    # T024: Intra-sector fallback pour secteurs < min_tickers_intra_sector (Lacune 8)
+    min_s = CONFIG["scanner"]["min_tickers_intra_sector"]
+    sector_counts = df["sector"].value_counts()
+    small_sectors = set(sector_counts[sector_counts < min_s].index)
+    df["use_cross_universe_ranking"] = df["sector"].isin(small_sectors)
+
+    if small_sectors:
+        cross_rank_pe = compute_percentile_ranks(df, "pe", ascending=False)
+        cross_rank_ev = compute_percentile_ranks(df, "ev_ebitda", ascending=False)
+        cross_rank_margin = compute_percentile_ranks(df, "margin")
+        mask = df["sector"].isin(small_sectors)
+        df.loc[mask, "rank_pe"] = cross_rank_pe[mask]
+        df.loc[mask, "rank_ev_ebitda"] = cross_rank_ev[mask]
+        df.loc[mask, "rank_margin"] = cross_rank_margin[mask]
+
+    # Scores qualité
     qw = CONFIG["scoring"]["quality_subweights"]
-    df["score_quality"] = (df["rank_roe"].fillna(0) * qw["roe"] + df["rank_margin"].fillna(0) * qw["margin"] +
-                          df["rank_fcf"].fillna(0) * qw["fcf_yield"] + df["rank_debt"].fillna(0) * qw["debt_ebitda"])
-
-    # Appliquer le calcul du score de valorisation
-    v_results = df.apply(compute_valuation_score, axis=1)
-    df["score_valuation"] = v_results.apply(lambda x: x[0])
-    # Mettre à jour v_ok si le score a été invalidé par manque de données
-    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1])
-
-    mw = CONFIG["scoring"]["momentum_subweights"]
-    df["score_momentum"] = (
-        df["rank_perf_6m"].fillna(0) * mw["perf_6m"] +
-        df["rank_outperf_6m"].fillna(0) * mw["outperf_6m"] +
-        df["rank_perf_3m"].fillna(0) * mw["perf_3m"] +
-        df["rank_surprise"].fillna(0) * mw["surprise_earnings"]
+    df["score_quality"] = (
+        df["rank_roe"].fillna(0) * qw["roe"] +
+        df["rank_margin"].fillna(0) * qw["margin"] +
+        df["rank_fcf"].fillna(0) * qw["fcf_yield"] +
+        df["rank_debt"].fillna(0) * qw["debt_ebitda"]
     )
 
+    v_results = df.apply(compute_valuation_score, axis=1)
+    df["score_valuation"] = v_results.apply(lambda x: x[0])
+    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1])
+
+    # T013: Score momentum per-row avec décroissance earnings (Lacune 6)
+    base_mw = CONFIG["scoring"]["momentum_subweights"]
+    today = _date.today()
+
+    def _row_momentum_score(row):
+        w = compute_momentum_weights(row.get("surprise_date"), base_mw, today)
+        return (
+            row.get("rank_perf_6m", 0) * w["perf_6m"] +
+            (row.get("rank_outperf_6m") or 0) * w["outperf_6m"] +
+            (row.get("rank_perf_3m") or 0) * w["perf_3m"] +
+            row.get("rank_surprise", 0) * w["surprise_earnings"] +
+            (row.get("rank_analyst_revision") or 0) * w.get("analyst_revision", 0)
+        )
+
+    df["score_momentum"] = df.apply(_row_momentum_score, axis=1)
     df["score_momentum"] = df.apply(lambda r: apply_momentum_penalties(r["score_momentum"], r), axis=1)
 
-    # Global
+    # Score global
     w = CONFIG["scoring"]["weights"]
     df["score_global"] = df.apply(
         lambda r: (
@@ -190,6 +235,7 @@ def stock_scoring_pipeline(all_data, symbols):
         axis=1
     )
     return df.sort_values("score_global", ascending=False)
+
 
 def etf_scoring_pipeline(all_data, etfs):
     """Pipeline de scoring simplifié pour les ETFs (Pur Prix)."""
@@ -226,8 +272,9 @@ def etf_scoring_pipeline(all_data, etfs):
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
     df["rank_outperf_spy"] = compute_percentile_ranks(df, "outperf_spy")
 
-    # Nouveau scoring 50/50 validé
-    df["score_global"] = (df["rank_perf_6m"].fillna(0) * 0.50 +
-                         df["rank_outperf_spy"].fillna(0) * 0.50)
+    df["score_global"] = (
+        df["rank_perf_6m"].fillna(0) * 0.50 +
+        df["rank_outperf_spy"].fillna(0) * 0.50
+    )
 
     return df.sort_values("score_global", ascending=False)
