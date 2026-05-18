@@ -1,0 +1,116 @@
+<!--
+SYNC IMPACT REPORT — 2026-05-19
+Version change: 1.0.0 → 1.1.0 (MINOR: material guidance additions, principle expansions)
+
+Modified principles:
+- I. Funnel Architecture → clarified FMP/yfinance strict separation, FMP unavailability behavior, SHORTLIST_SIZE constraint (30, non-negotiable)
+- III. Market Gate → expanded from 2-level to 4-level priority cascade; VIX > 35 now triggers Panique regardless of SPY position (critical fix)
+- V. Quantitative Momentum → 4 sub-criteria expanded to 5 (analyst estimate revisions added as V1.0 requirement)
+
+Added sections:
+- VI. Sector GICS Integrity (new principle)
+- VII. Signal Persistence (new principle)
+- Constants table in Technical Standards
+
+Templates requiring update:
+- ✅ .specify/memory/constitution.md (this file)
+- ⚠ .specify/templates/plan-template.md — Constitution Check items I, III, V reference old principle content (advisory, not blocking)
+
+Follow-up TODOs:
+- Code fixes required (not in scope of spec update): NameError main.py:107, totalCash mapping, Market Gate 3-level logic implementation
+-->
+
+# ValueMomentum Scanner Constitution
+<!-- High-fidelity quantitative scanning for Quality, Valuation, and Momentum -->
+
+## Core Principles
+
+### I. Funnel Architecture & FMP/yfinance Strict Separation
+The scanner MUST operate as a two-stage funnel to balance scale and precision.
+- **Stage 1 (Chalutier)**: Broad technical screening (~700 tickers) using `yfinance` exclusively for price action, volume, and momentum (OHLCV). `yfinance` MUST NOT be used for any balance sheet, income statement, or ratio data.
+- **Stage 2 (Sniper)**: Deep fundamental analysis on a shortlist of exactly **SHORTLIST_SIZE = 30 tickers** using FMP official API. This value is non-negotiable: 30 × 7 FMP endpoints = 210 calls nominal against a 250 calls/day quota. Exceeding 30 tickers requires a budget audit first.
+- **FMP Unavailability**: If FMP is unreachable (missing key or persistent 5xx after 2 retries), the system MUST send a Telegram alert `⚠️ Sniper FMP indisponible` and stop the scan. There is NO fallback to yfinance for fundamental data — a signal without FMP-verified fundamentals is worse than no signal.
+- Architecture MUST strictly separate broad discovery (yfinance) from precision analysis (FMP).
+
+### II. Quality & Stability (The Moat)
+Investment signals MUST be rooted in structural quality.
+- A 3-year average Return on Equity (ROE > 0) is the primary quality gate. ROE < 0 = unconditional exclusion.
+- ROE MUST be computed from FMP `income-statement` (3 annual periods), never from yfinance TTM.
+- Fundamental data MUST be verified for freshness: data older than 120 days triggers a warning flag `⚠️ données potentiellement périmées`; data older than 180 days results in automatic exclusion from the final ranking.
+- Tickers with `sector = None` (GICS missing) are excluded from the Actions scoring pipeline — no intra-sector comparison is possible without a valid sector label.
+
+### III. Market Gate (Survival Priority — Priority Cascade)
+Capital preservation is the absolute priority. The Market Gate MUST evaluate conditions in strict priority order (first match wins):
+
+1. **Panique** (Priority 1): `VIX > 35` — regardless of SPY position. Scan MUST be cancelled. Telegram alert sent. One entry written to `scans` table with `regime='panic'`. No entries written to `signals`.
+2. **Prudence** (Priority 2): `SPY < EMA200 AND VIX between 25 and 35`. Scan runs. Every signal flagged `⚠️ RÉGIME DE PRUDENCE`.
+3. **Bear Light** (Priority 3): `SPY < EMA200 AND VIX ≤ 25`. Scan runs normally. Internal log warning only — no flag on Telegram signals.
+4. **Normal** (Priority 4): `SPY ≥ EMA200 AND VIX ≤ 25`. Full scan, unrestricted signal emission.
+
+The VIX takes precedence over EMA200 because VIX is a leading indicator of panic; EMA200 lags by weeks. A crash in progress (VIX > 35) MUST trigger Panique even if SPY has not yet crossed below EMA200.
+
+### IV. Institutional Liquidity & Execution
+To ensure tradeability and minimize slippage, the scanner MUST only consider institutional-grade instruments.
+- Minimum thresholds (enforced daily before scoring): Market Cap > $2B, Average Daily Dollar Volume (20-day) > $5M, Price > $5, Listed on NYSE/NASDAQ/AMEX only.
+- The universe is strictly US-only in v1.0. Non-US tickers (e.g., `.NS` suffixes) MUST NOT be included in `tickers_universe.json`.
+- Penny stocks, OTC instruments, and low-liquidity micro-caps are excluded unconditionally.
+
+### V. Quantitative Momentum (The Catalyst — 5 Sub-Criteria)
+Strategy focuses on the convergence of price momentum and fundamental acceleration:
+- **Primary signals** (price): 6-month performance (30%) and 6-month sector outperformance vs SPDR benchmark (30%).
+- **Confirmatory signal** (price): 3-month performance (15%).
+- **Fundamental acceleration — backward** (FMP): Earnings Surprise % via `earnings-surprises` (15%, with temporal decay: weight → 0 linearly over 90 days post-earnings; freed weight redistributed proportionally to the 4 remaining criteria).
+- **Fundamental acceleration — forward** (FMP): Analyst estimate revisions 3M via `analyst-estimates` (10%, no decay — revisions reflect sustained conviction).
+- Short-term extremes MUST be penalized: 1-month performance > +25% → -10 pts on momentum score; 1-month < -20% → -5 pts.
+
+### VI. Sector GICS Integrity
+The intra-sector percentile ranking is the foundation of fair valuation comparison (P/E, EV/EBITDA, operating margin).
+- Source of truth for sector label: yfinance `.info["sector"]`. FMP sector labels are secondary and may diverge.
+- If `sector = None`: ticker excluded from Actions scoring (logged as `sector_missing`).
+- If a sector has **fewer than 3 tickers** in the scored shortlist: those tickers MUST use cross-universe ranking for all intra-sector metrics. A 1-2 ticker intra-sector percentile is statistically meaningless (single ticker always scores 100th percentile).
+- If the total scored universe falls below **MIN_UNIVERSE_SIZE = 100 tickers**: percentile ranking loses statistical validity; scan MUST be cancelled with a warning log.
+
+### VII. Signal Persistence (Conviction over Calendar)
+The scoring model — not time — decides when a signal expires.
+- `first_seen_date` in SQLite is NEVER reset when a ticker reappears in the Top 10 after an absence. It records the original signal date for historical traceability.
+- Tickers present 90+ consecutive days in the Top 10 represent a conviction signal, not a rotation failure. No forced exclusion by calendar.
+- A ticker exits the Top 10 only when its `score_global` falls below the 10th threshold in the ranked universe. The `first_seen_date` field is informational — it contextualizes the decision for the human trader, it does not drive mechanical action.
+
+## Technical Standards
+
+### Core Constraints
+
+- **SQLite WAL**: Mandatory for concurrent bot writing and dashboard reading.
+- **Asynchronous Core**: Native `asyncio` (APScheduler 4.x async) for all I/O, scheduling, and notifications. No synchronous blocking in the event loop.
+- **API Resilience**: Jittered delay (0.8s–1.5s) between all external fetches. FMP: 2 retries max (circuit-breaker pattern). yfinance: 3 retries with exponential backoff.
+- **Telegram**: HTML parse_mode. All string data MUST be html.escape()'d before send. Messages MUST be truncated to 4096 chars maximum (Telegram API limit). Rate limit: 1.5s between messages.
+
+### Configurable Constants (config.yaml — source of truth)
+
+| Constant | Default | Constraint |
+|---|---|---|
+| `SHORTLIST_SIZE` | 30 | Hard max 30 (FMP budget) |
+| `VIX_PANIC_THRESHOLD` | 35 | Range [30, 45] |
+| `VIX_WARNING_THRESHOLD` | 25 | Range [20, 30] |
+| `MAX_TICKERS_PER_SECTOR` | 3 | 10 = alpha-pure mode (risk) |
+| `MAX_WORKERS_UNIVERSE` | 4 | Hard max 6 (yfinance ban risk) |
+| `FMP_MAX_RETRIES` | 2 | Hard max 2 (budget) |
+| `MIN_UNIVERSE_SIZE` | 100 | Below = scan cancelled |
+| `TELEGRAM_MAX_CHARS` | 4096 | Fixed (API limit) |
+
+## Validation & Quality Gates
+
+- **Hermetic Integration Tests**: All integration tests MUST use `VCR.py` cassettes. First-run cassette recording requires explicit opt-in. Tests MUST NOT make live API calls by default.
+- **Temporal Determinism**: `Freezegun` is mandatory for all time-sensitive logic (NYSE calendar, earnings windows, data freshness, earnings surprise decay).
+- **Fail-Safe Data Parsing**: All external data MUST pass None-safe validation before entering the scoring engine. `data.get("key")` with value check, never `"key" in data` alone.
+- **FMP Budget Monitoring**: Test suite MUST include a mock call counter verifying that a full 30-ticker Sniper run stays within 250 FMP calls.
+
+## Governance
+
+The ValueMomentum Scanner Constitution is the sovereign source of truth for architectural and strategic decisions.
+
+- **Conflict Resolution**: Any implementation that violates the Funnel Architecture (Principle I), Market Gate priority cascade (Principle III), or FMP/yfinance separation (Principle I) is a critical failure requiring immediate rollback.
+- **Amendments**: Changes to core weights, thresholds, or the FMP budget calculation MUST be documented with financial rationale, version bump, and the amendment date added to the Constants table.
+- **Spec Alignment**: `specs/Spec_ValueMomentum_Scanner.md` is the authoritative implementation reference. Constitution principles always supersede spec details when they conflict. Spec updates that introduce contradictions with this Constitution MUST trigger a Constitution amendment.
+
+**Version**: 1.1.0 | **Ratified**: 2026-05-18 | **Last Amended**: 2026-05-19

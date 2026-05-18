@@ -18,8 +18,8 @@ scanner:
 
 scoring:
   weights:
-    quality: 0.40
-    valuation: 0.25
+    quality: 0.35
+    valuation: 0.30
     momentum: 0.35
   quality_subweights:
     roe: 0.40
@@ -34,4 +34,4 @@ scoring:
     perf_6m: 0.30
     outperf_6m: 0.35
     perf_3m: 0.20
-    sales_growth: 0.15
+    surprise_earnings: 0.15

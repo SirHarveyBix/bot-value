@@ -104,7 +104,7 @@ async def run_scanner(force=False):
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
         # 9. Notify
-        await notify(top_10_stocks, top_5_etfs)
+        await notify(top_10_stocks, top_5_etfs, market_regime=regime)
 
         if not top_10_stocks.empty:
             logger.info("TOP 5 STOCKS IDENTIFIED:")

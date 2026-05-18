@@ -52,6 +52,15 @@ def get_eligibility_filters(ticker_info):
         if exchange not in valid_exchanges:
             return False, f"Exchange non supporté: {exchange}"
 
+        # Ancienneté des données (2 ans d'historique requis)
+        # On vérifie si firstTradeDateEpochUtc est présent (yfinance .info)
+        first_trade = ticker_info.get("firstTradeDateEpochUtc")
+        if first_trade:
+            from datetime import datetime, timedelta
+            two_years_ago = (datetime.now() - timedelta(days=365*2)).timestamp()
+            if first_trade > two_years_ago:
+                return False, "Moins de 2 ans d'historique"
+
         return True, None
     except Exception as e:
         return False, f"Erreur lors du filtrage: {str(e)}"
