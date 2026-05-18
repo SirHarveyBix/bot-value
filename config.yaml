@@ -12,9 +12,16 @@ scanner:
   max_data_age_days: 180
   min_valid_data_ratio: 0.60
   inter_request_delay: 1.0
-  max_workers: 2
+  max_workers_universe: 4
   fmp_api_key: ${FMP_API_KEY}
   fmp_base_url: "https://financialmodelingprep.com/api/v3"
+  shortlist_size: 30
+  vix_panic_threshold: 35
+  vix_warning_threshold: 25
+  fmp_max_retries: 2
+  min_universe_size: 100
+  telegram_max_chars: 4096
+  min_tickers_intra_sector: 3
 
 scoring:
   weights:
@@ -32,6 +39,7 @@ scoring:
     peg: 0.20
   momentum_subweights:
     perf_6m: 0.30
-    outperf_6m: 0.35
-    perf_3m: 0.20
+    outperf_6m: 0.30
+    perf_3m: 0.15
     surprise_earnings: 0.15
+    analyst_revision: 0.10

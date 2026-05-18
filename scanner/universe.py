@@ -96,7 +96,7 @@ def build_eligible_universe(stocks):
     eligible_stocks = []
 
     # Utilisation de ThreadPoolExecutor pour accélérer le processus (Section 2.2 des specs)
-    max_workers = CONFIG["scanner"].get("max_workers", 8)
+    max_workers = CONFIG["scanner"]["max_workers_universe"]
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(_check_single_ticker, stocks))

@@ -7,12 +7,12 @@ from apscheduler import AsyncScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone
 
-from scanner.config import logger
-from scanner.fetcher import fetch_all_data, fetch_market_indices, fetch_prices_batch
+from scanner.config import CONFIG, logger
+from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
-from scanner.notifier import notify
+from scanner.notifier import notify, notify_panic
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
-from scanner.storage import save_signals
+from scanner.storage import save_scan_entry, save_signals, update_signal_returns
 from scanner.universe import build_eligible_universe, load_universe
 
 
@@ -32,7 +32,7 @@ async def run_scanner(force=False):
         return
 
     try:
-        # 0. Market Gate : EMA 200 + VIX (Section 4.0)
+        # 0. Market Gate : VIX-priority 4-level cascade (Bug 4 fix)
         market_history = await fetch_market_indices()
         market_regime = "unknown"
         current_spy = None
@@ -47,16 +47,31 @@ async def run_scanner(force=False):
             current_spy = spy_close.iloc[-1].item()
             current_vix = vix_close.iloc[-1].item()
 
-            # Règle de Stress : SPY < EMA 200 ET VIX > 25
-            if current_spy < ema200 and current_vix > 25:
-                market_regime = "stress"
-                logger.warning(f"🚨 RÉGIME DE PANIQUE DÉTECTÉ (SPY {current_spy:.2f} < EMA200 {ema200:.2f} ET VIX {current_vix:.1f} > 25)")
+            VIX_PANIC = CONFIG["scanner"]["vix_panic_threshold"]
+            VIX_WARN = CONFIG["scanner"]["vix_warning_threshold"]
+
+            if current_vix > VIX_PANIC:
+                market_regime = "panic"
+            elif current_spy < ema200 and current_vix > VIX_WARN:
+                market_regime = "prudence"
             elif current_spy < ema200:
                 market_regime = "bear_light"
-                logger.info(f"⚠️ MARCHÉ SOUS EMA 200 (VIX {current_vix:.1f} calme) - Vigilance.")
             else:
-                market_regime = "bull"
-                logger.info(f"✅ MARCHÉ SAIN (SPY {current_spy:.2f} > EMA 200 {ema200:.2f})")
+                market_regime = "normal"
+
+            logger.info(f"Market Gate: regime={market_regime} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}")
+
+        # T020: Panic early-return (Lacune 9 / US2)
+        if market_regime == "panic":
+            market_data = {
+                "regime": market_regime,
+                "spy_price": current_spy,
+                "spy_ema200": ema200,
+                "vix": current_vix,
+            }
+            save_scan_entry(market_data)
+            await notify_panic(current_vix, current_spy, ema200)
+            return
 
         # 1. Universe Builder
         universe = load_universe()
@@ -72,15 +87,20 @@ async def run_scanner(force=False):
         if not check_batch_data_ratio(price_data, len(eligible_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du batch download.")
             return
-        
+
         # 4. Premier Screening : Momentum uniquement
         momentum_ranked_df = momentum_screening_pipeline(price_data, eligible_stocks)
-        shortlist_stocks = momentum_ranked_df.head(50)["symbol"].tolist()
-        
+        # T004: Bug 3 fix — shortlist_size depuis config
+        shortlist_stocks = momentum_ranked_df.head(CONFIG["scanner"]["shortlist_size"])["symbol"].tolist()
+
         logger.info(f"Shortlist de {len(shortlist_stocks)} tickers sélectionnés pour analyse approfondie.")
 
         # 5. Le Sniper : Fetch des fondamentaux complets uniquement pour la shortlist
-        all_data = await fetch_all_data(shortlist_stocks, initial_etfs, prices_batch=price_data)
+        # T018: Catch FMPUnavailableError → return (Lacune 13)
+        try:
+            all_data = await fetch_all_data(shortlist_stocks, initial_etfs, prices_batch=price_data)
+        except FMPUnavailableError:
+            return
 
         if not check_data_ratio(all_data, len(shortlist_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du fetch des fondamentaux (Sniper).")
@@ -103,8 +123,8 @@ async def run_scanner(force=False):
         }
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
-        # 9. Notify
-        await notify(top_10_stocks, top_5_etfs, market_regime=regime)
+        # 9. Notify — T002: Bug 1 fix (market_regime=market_regime, pas regime)
+        await notify(top_10_stocks, top_5_etfs, market_regime=market_regime)
 
         if not top_10_stocks.empty:
             logger.info("TOP 5 STOCKS IDENTIFIED:")
@@ -128,28 +148,25 @@ async def main():
 
     logger.info("Démarrage du ValueMomentum Scanner (APScheduler 4.x Async Native)...")
 
-    # APScheduler 4.x : AsyncScheduler est le point d'entrée direct
     async with AsyncScheduler() as scheduler:
         tz = timezone("America/New_York")
-        
-        # Configuration du trigger Cron
-        trigger = CronTrigger(
-            day_of_week="mon-fri",
-            hour=9,
-            minute=35,
-            timezone=tz
-        )
 
-        # Ajout de l'horaire (schedule)
+        # Job principal : scan quotidien 09h35 ET
         await scheduler.add_schedule(
             run_scanner,
-            trigger=trigger,
+            trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=35, timezone=tz),
             id="daily_scan"
         )
 
-        logger.info("Scheduler configuré pour 09:35 ET, du lundi au vendredi.")
-        
-        # Lancer le scheduler
+        # T028: Job secondaire : mise à jour retours 18h00 ET (Lacune 11)
+        await scheduler.add_schedule(
+            update_signal_returns,
+            trigger=CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone=tz),
+            id="update_returns"
+        )
+
+        logger.info("Scheduler configuré : scan 09h35 ET + retours 18h00 ET, lundi-vendredi.")
+
         await scheduler.run_until_stopped()
 
 if __name__ == "__main__":

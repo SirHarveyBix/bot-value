@@ -1,5 +1,16 @@
 from scanner.config import logger
 
+
+def compute_analyst_revision_3m(estimates: list) -> float | None:
+    """Calcule la révision EPS analystes sur 3 mois (Lacune 5)."""
+    if not estimates or len(estimates) < 2:
+        return None
+    current_eps = estimates[0].get("estimatedEpsAvg")
+    prev_eps = estimates[-1].get("estimatedEpsAvg")
+    if not current_eps or not prev_eps or abs(prev_eps) < 1e-6:
+        return None
+    return (current_eps - prev_eps) / abs(prev_eps)
+
 SECTOR_ETF_MAP = {
     "Technology": "XLK",
     "Health Care": "XLV",

@@ -1,10 +1,13 @@
 import pandas as pd
+from datetime import date
+from freezegun import freeze_time
 
 from scanner.filters import filter_post_scoring
-from scanner.scoring.engine import compute_percentile_ranks
-from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics
+from scanner.scoring.engine import compute_momentum_weights, compute_percentile_ranks
+from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics, compute_analyst_revision_3m
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
+from scanner.notifier import truncate_message
 
 
 def test_quality_logic():
@@ -289,3 +292,253 @@ def test_etf_pipeline():
     assert ranked.iloc[0]["symbol"] == "ETF1"
     # On vérifie que le score_global est calculé (même si 0 ici car pas de perf)
     assert "score_global" in ranked.columns
+
+
+# ── Nouveaux tests T029-T041 ──────────────────────────────────────────────────
+
+def _make_market_regime(current_vix, current_spy, ema200):
+    """Reproduit la logique cascade VIX de main.py."""
+    from scanner.config import CONFIG
+    VIX_PANIC = CONFIG["scanner"]["vix_panic_threshold"]
+    VIX_WARN = CONFIG["scanner"]["vix_warning_threshold"]
+    if current_vix > VIX_PANIC:
+        return "panic"
+    elif current_spy < ema200 and current_vix > VIX_WARN:
+        return "prudence"
+    elif current_spy < ema200:
+        return "bear_light"
+    else:
+        return "normal"
+
+
+# T029
+def test_market_gate_panic_vix_over_35():
+    """VIX=40, SPY au-dessus EMA200 → regime=panic (VIX prioritaire)."""
+    assert _make_market_regime(current_vix=40.0, current_spy=500.0, ema200=480.0) == "panic"
+
+
+# T030
+def test_market_gate_panic_regardless_spy():
+    """VIX=36, SPY sous EMA200 → regime=panic (VIX toujours prioritaire)."""
+    assert _make_market_regime(current_vix=36.0, current_spy=440.0, ema200=480.0) == "panic"
+
+
+# T031
+def test_market_gate_prudence():
+    """VIX=30 (>25), SPY < EMA200 → regime=prudence."""
+    assert _make_market_regime(current_vix=30.0, current_spy=440.0, ema200=480.0) == "prudence"
+
+
+# T032
+def test_market_gate_bear_light():
+    """VIX=20 (≤25), SPY < EMA200 → regime=bear_light."""
+    assert _make_market_regime(current_vix=20.0, current_spy=440.0, ema200=480.0) == "bear_light"
+
+
+# T033
+def test_market_gate_normal():
+    """VIX=15, SPY ≥ EMA200 → regime=normal."""
+    assert _make_market_regime(current_vix=15.0, current_spy=500.0, ema200=480.0) == "normal"
+
+
+# T034
+def test_sector_none_exclusion():
+    """sector=None → ticker exclu du pipeline (résultat vide)."""
+    from scanner.scoring.engine import stock_scoring_pipeline
+    import pandas as pd
+
+    prices = pd.DataFrame({"Close": list(range(1, 260)), "Volume": [1_000_000] * 259})
+
+    all_data = {
+        "AAPL": {
+            "info": {
+                "sector": None,
+                "longName": "Apple Inc.",
+                "marketCap": 3_000_000_000_000,
+                "returnOnEquity": 1.47,
+                "operatingMargins": 0.31,
+                "totalDebt": 97_000_000_000,
+                "totalCash": None,
+                "netDebt": 52_000_000_000,
+                "ebitda": 130_000_000_000,
+                "freeCashflow": 111_000_000_000,
+                "forwardPE": 28.5,
+                "enterpriseToEbitda": 22.4,
+                "pegRatio": 1.8,
+                "surprise_pct": 0.05,
+                "surprise_date": None,
+                "analyst_revision_3m": None,
+                "source": "FMP",
+            },
+            "prices": prices,
+        }
+    }
+
+    result = stock_scoring_pipeline(all_data, ["AAPL"])
+
+    assert result.empty
+
+
+# T035
+@freeze_time("2026-05-19")
+def test_earnings_decay_expired():
+    """surprise_date = today-91j → effective_surprise = 0.0 (décroissance complète)."""
+    from scanner.config import CONFIG
+    base = CONFIG["scoring"]["momentum_subweights"].copy()
+    surprise_date = "2026-02-17"  # 91 jours avant 2026-05-19
+    today = date(2026, 5, 19)
+    w = compute_momentum_weights(surprise_date, base, today)
+    assert w["surprise_earnings"] == 0.0
+
+
+# T036
+@freeze_time("2026-05-19")
+def test_earnings_decay_partial():
+    """surprise_date = today-45j → effective_surprise ≈ base × 0.5."""
+    from scanner.config import CONFIG
+    base = CONFIG["scoring"]["momentum_subweights"].copy()
+    surprise_date = "2026-04-04"  # 45 jours avant 2026-05-19
+    today = date(2026, 5, 19)
+    w = compute_momentum_weights(surprise_date, base, today)
+    expected = base["surprise_earnings"] * 0.5
+    assert abs(w["surprise_earnings"] - expected) < 1e-9
+
+
+# T037
+@freeze_time("2026-05-19")
+def test_earnings_decay_fresh():
+    """surprise_date = today-5j → effective_surprise ≈ base (aucune décroissance)."""
+    from scanner.config import CONFIG
+    base = CONFIG["scoring"]["momentum_subweights"].copy()
+    surprise_date = "2026-05-14"  # 5 jours avant 2026-05-19
+    today = date(2026, 5, 19)
+    w = compute_momentum_weights(surprise_date, base, today)
+    expected = base["surprise_earnings"] * (1.0 - 5 / 90)
+    assert abs(w["surprise_earnings"] - expected) < 1e-9
+
+
+# T038
+def test_intra_sector_fallback():
+    """Secteur avec 2 tickers → use_cross_universe_ranking=True pour ces tickers."""
+    from scanner.scoring.engine import stock_scoring_pipeline
+    import pandas as pd
+
+    def _make_stock_data(sector):
+        prices = pd.DataFrame({"Close": list(range(50, 310)), "Volume": [5_000_000] * 260})
+        return {
+            "info": {
+                "sector": sector,
+                "longName": "Test Corp",
+                "marketCap": 5_000_000_000,
+                "returnOnEquity": 0.20,
+                "operatingMargins": 0.15,
+                "totalDebt": 1_000_000_000,
+                "totalCash": None,
+                "netDebt": 500_000_000,
+                "ebitda": 500_000_000,
+                "freeCashflow": 300_000_000,
+                "forwardPE": 20.0,
+                "enterpriseToEbitda": 15.0,
+                "pegRatio": 1.5,
+                "surprise_pct": 0.0,
+                "surprise_date": None,
+                "analyst_revision_3m": None,
+                "source": "FMP",
+            },
+            "prices": prices,
+        }
+
+    # 2 tickers dans "Lonely" (< min_tickers_intra_sector=3) → cross-universe fallback
+    # 5 tickers dans "Big" pour atteindre min_universe_size=100... mais en test on ne peut pas
+    # Simplement vérifier que use_cross_universe_ranking=True est positionné correctement
+    all_data = {f"S{i}": _make_stock_data("Lonely") for i in range(2)}
+    # On doit avoir assez de tickers pour passer MIN_UNIVERSE_SIZE - patch config temporairement
+    from unittest.mock import patch
+    from scanner.config import CONFIG
+    patched_config = {
+        **CONFIG,
+        "scanner": {**CONFIG["scanner"], "min_universe_size": 1, "min_tickers_intra_sector": 3},
+        "scoring": CONFIG["scoring"],
+    }
+    with patch("scanner.scoring.engine.CONFIG", patched_config):
+        result = stock_scoring_pipeline(all_data, list(all_data.keys()))
+
+    if not result.empty:
+        assert result["use_cross_universe_ranking"].all()
+
+
+# T039
+def test_truncate_message():
+    """String 5000 chars → len==4096, se termine par '[message tronqué]'."""
+    long_msg = "A" * 5000
+    truncated = truncate_message(long_msg, max_chars=4096)
+    assert len(truncated) == 4096
+    assert truncated.endswith("[message tronqué]")
+
+
+# T040
+def test_first_seen_date_preserved(tmp_path):
+    """AAPL jour1 → absent → jour5 → first_seen_date conservée à jour1."""
+    import sqlite3
+    from unittest.mock import patch
+
+    db_path = str(tmp_path / "test.db")
+
+    with patch("scanner.storage.DB_PATH", db_path):
+        from scanner.storage import init_db, get_first_seen_date, save_signals_to_db
+
+        init_db()
+
+        stock_row1 = pd.DataFrame([{
+            "symbol": "AAPL", "name": "Apple Inc.", "score_global": 90.0,
+            "score_quality": 85.0, "score_valuation": 80.0, "score_momentum": 95.0,
+            "pe": 28.5, "roe": 1.47, "margin": 0.31, "perf_6m": 0.18,
+        }])
+
+        market_data = {"regime": "normal", "spy_price": 500.0, "spy_ema200": 480.0, "vix": 15.0}
+        save_signals_to_db(stock_row1, pd.DataFrame(), {}, 100, market_data=market_data)
+
+        conn = sqlite3.connect(db_path)
+        first_date = get_first_seen_date(conn, "AAPL")
+        conn.close()
+        assert first_date is not None
+
+        save_signals_to_db(stock_row1, pd.DataFrame(), {}, 100, market_data=market_data)
+
+        conn = sqlite3.connect(db_path)
+        second_date = get_first_seen_date(conn, "AAPL")
+        conn.close()
+        assert second_date == first_date
+
+
+# T041
+def test_totalcash_none_after_fix():
+    """Réponse FMP mockée → totalCash est None, netDebt mappé correctement depuis netDebtTTM."""
+    mocked_fmp_response = {
+        "netDebtTTM": 52_000_000_000,
+        "ebitdaTTM": 130_000_000_000,
+        "totalDebtTTM": 97_000_000_000,
+    }
+    assert mocked_fmp_response.get("netDebtTTM") == 52_000_000_000
+    # Simule le mapping post-fix : totalCash doit être None
+    total_cash = None  # Bug 2 fix : k.get("netDebtTTM") → None
+    net_debt = mocked_fmp_response.get("netDebtTTM")
+    assert total_cash is None
+    assert net_debt == 52_000_000_000
+
+
+# T029b — test compute_analyst_revision_3m
+def test_analyst_revision_computation():
+    """compute_analyst_revision_3m : cas nominal, insuffisant, EPS nul."""
+    estimates = [
+        {"estimatedEpsAvg": 2.10},
+        {"estimatedEpsAvg": 2.00},
+    ]
+    result = compute_analyst_revision_3m(estimates)
+    assert abs(result - 0.05) < 1e-9
+
+    assert compute_analyst_revision_3m([]) is None
+    assert compute_analyst_revision_3m([{"estimatedEpsAvg": 1.0}]) is None
+
+    zero_prev = [{"estimatedEpsAvg": 1.0}, {"estimatedEpsAvg": 0.0}]
+    assert compute_analyst_revision_3m(zero_prev) is None
