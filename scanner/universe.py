@@ -7,6 +7,7 @@ import yfinance as yf
 
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
+from datetime import datetime, timedelta
 
 # On définit le TTL du cache fondamentaux (24h)
 TTL_FUNDAMENTALS = 24 * 3600
@@ -56,7 +57,6 @@ def get_eligibility_filters(ticker_info):
         # On vérifie si firstTradeDateEpochUtc est présent (yfinance .info)
         first_trade = ticker_info.get("firstTradeDateEpochUtc")
         if first_trade:
-            from datetime import datetime, timedelta
             two_years_ago = (datetime.now() - timedelta(days=365*2)).timestamp()
             if first_trade > two_years_ago:
                 return False, "Moins de 2 ans d'historique"

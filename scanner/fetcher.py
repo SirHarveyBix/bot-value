@@ -10,6 +10,7 @@ import yfinance as yf
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
 from scanner.scoring.momentum import compute_analyst_revision_3m
+from scanner.notifier import notify_fmp_unavailable
 
 # TTL en secondes
 TTL_FUNDAMENTALS = 24 * 3600
@@ -219,7 +220,6 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
                     "prices": prices
                 }
     except FMPUnavailableError:
-        from scanner.notifier import notify_fmp_unavailable
         await notify_fmp_unavailable()
         raise
 

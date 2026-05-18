@@ -8,16 +8,17 @@ from scanner.storage import save_signals
 from scanner.universe import load_universe
 
 @pytest.mark.asyncio
-@pytest.mark.vcr
 async def test_full_pipeline_vcr():
     """
-    Test d'intégration complet utilisant VCR.py pour l'isolation réseau.
+    Test d'intégration complet — pipeline normal (hermetique, sans réseau).
     Simule une exécution un jour de bourse normal (mercredi 15 janv 2025).
-    min_universe_size patché à 1 car cassette n'a que 5 stocks.
+    min_universe_size patché à 1 car seulement 5 stocks mock.
     """
     from unittest.mock import patch
     from scanner.config import CONFIG
     import scanner.scoring.engine as engine_module
+    from scanner import fetcher as fetcher_module
+    import numpy as np
 
     patched_cfg = {
         **CONFIG,
@@ -25,34 +26,64 @@ async def test_full_pipeline_vcr():
         "scoring": CONFIG["scoring"],
     }
 
+    mock_info = {
+        "longName": "Mock Corp", "sector": "Technology",
+        "marketCap": 5_000_000_000, "returnOnEquity": 0.20, "roe_ttm": 0.20, "roe_3y": 0.20,
+        "operatingMargins": 0.15, "totalDebt": 1e9, "totalCash": None, "netDebt": 5e8,
+        "ebitda": 5e8, "freeCashflow": 3e8, "forwardPE": 20.0, "enterpriseToEbitda": 15.0,
+        "pegRatio": 1.5, "surprise_pct": 0.05, "surprise_date": "2024-10-15",
+        "analyst_revision_3m": 0.02, "mostRecentQuarter": 1728000000.0, "source": "FMP",
+    }
+
+    dates = pd.date_range("2024-01-01", periods=252, freq="B")
+
+    async def mock_fetch_ticker(symbol, client=None):
+        return {**mock_info, "symbol": symbol}
+
+    stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+
+    spy_prices = pd.Series([490.0] * 252, index=dates)
+    vix_prices = pd.Series([15.0] * 252, index=dates)
+    mock_indices = pd.DataFrame({
+        ("Close", "SPY"): spy_prices,
+        ("Close", "^VIX"): vix_prices,
+    })
+    mock_indices.columns = pd.MultiIndex.from_tuples(mock_indices.columns)
+
+    data_dict = {}
+    for s in stocks + ["SPY"]:
+        for col in ["Close", "Open", "High", "Low", "Volume"]:
+            data_dict[(s, col)] = (np.linspace(100, 130, 252) if col != "Volume" else np.full(252, 1e6))
+    mock_batch = pd.DataFrame(data_dict, index=dates)
+    mock_batch.columns = pd.MultiIndex.from_tuples(mock_batch.columns)
+
     with freeze_time("2025-01-15 10:00:00", tick=True):
         with patch.object(engine_module, "CONFIG", patched_cfg):
-            # 0. Market Gate
-            market_history = await fetch_market_indices()
-            assert not market_history.empty
+            with patch.object(fetcher_module, "fetch_ticker_info", side_effect=mock_fetch_ticker):
+                with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_batch):
+                    with patch.object(fetcher_module, "fetch_market_indices", return_value=mock_indices):
+                        # 0. Market Gate
+                        market_history = await fetch_market_indices()
+                        assert not market_history.empty
 
-            # 1. Universe
-            universe = load_universe()
-            stocks = universe.get("stocks", [])[:5]
+                        # 1–2. Fetch (hermetique)
+                        all_data = await fetch_all_data(stocks, prices_batch=mock_batch)
+                        assert len(all_data) >= 5
 
-            # 2. Fetch
-            all_data = await fetch_all_data(stocks)
-            assert len(all_data) >= 5
+                        # 3. Scoring
+                        ranked_df = stock_scoring_pipeline(all_data, stocks)
+                        assert not ranked_df.empty
 
-            # 3. Scoring
-            ranked_df = stock_scoring_pipeline(all_data, stocks)
-            assert not ranked_df.empty
+                        # 4. Storage (WAL mode)
+                        market_data = {
+                            "regime": "normal",
+                            "spy_price": 500.0,
+                            "spy_ema200": 480.0,
+                            "vix": 15.0
+                        }
+                        save_signals(ranked_df.head(3), pd.DataFrame(), all_data, len(stocks), market_data=market_data)
 
-            # 4. Storage (WAL mode)
-            market_data = {
-                "regime": "normal",
-                "spy_price": 500.0,
-                "spy_ema200": 480.0,
-                "vix": 15.0
-            }
-            save_signals(ranked_df.head(3), pd.DataFrame(), all_data, len(stocks), market_data=market_data)
-
-            assert os.path.exists("data/signals/scanner_history.db")
+                        assert os.path.exists("data/signals/scanner_history.db")
 
 
 # T042 — Budget FMP ≤ 250 calls pour 30 tickers
@@ -141,7 +172,6 @@ async def test_fmp_unavailable_abort():
     """
     from unittest.mock import patch
     from scanner import fetcher as fetcher_module
-    from scanner import notifier as notifier_module
 
     fmp_unavailable_called = False
 
@@ -156,7 +186,7 @@ async def test_fmp_unavailable_abort():
 
     with patch.object(fetcher_module, "fetch_fmp_data", side_effect=mock_fmp_data):
         with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_prices):
-            with patch.object(notifier_module, "notify_fmp_unavailable",
+            with patch.object(fetcher_module, "notify_fmp_unavailable",
                               side_effect=mock_notify_fmp):
                 with pytest.raises(FMPUnavailableError):
                     await fetch_all_data(["AAPL"], [], prices_batch=mock_prices)

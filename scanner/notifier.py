@@ -1,6 +1,6 @@
 import asyncio
 import html
-from datetime import datetime
+from datetime import date, datetime
 
 from telegram import Bot
 
@@ -96,7 +96,6 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         msg += f"🏢 {escape_html(row.get('sector', 'Unknown'))} | Cap : ${row.get('mcap_b', 0):.1f}B\n"
 
         if row.get("first_seen_date"):
-            from datetime import date
             days_active = (date.today() - date.fromisoformat(row["first_seen_date"])).days
             msg += f"⏱️ Signal actif depuis : {days_active} jours\n"
 
