@@ -1,5 +1,6 @@
 import asyncio
 import html
+from datetime import datetime
 
 from telegram import Bot
 
@@ -10,7 +11,7 @@ def escape_html(text):
     """Échappe les caractères spéciaux pour le mode HTML de Telegram."""
     return html.escape(str(text))
 
-async def send_telegram_signals(top_stocks, top_etfs):
+async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
     """
     Envoie les signaux via Telegram.
     Respecte la limite de 1 message/seconde avec un délai de 1.5s.
@@ -26,6 +27,12 @@ async def send_telegram_signals(top_stocks, top_etfs):
 
     # 1. Envoi du Header
     header = f"📊 <b>ValueMomentum Scanner — {datetime.now().strftime('%Y-%m-%d')}</b>\n"
+    
+    # Alerte Régime de Marché si Stress Majeur
+    if market_regime and market_regime.get("status") == "Stress Majeur":
+        header += "🚨 <b>RÉGIME DE PANIQUE : EXPOSITION DÉCONSEILLÉE</b>\n"
+        header += f"<i>SPY < EMA 200 et VIX ({market_regime.get('vix', 0):.1f}) > 25</i>\n"
+    
     header += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n🏆 <b>TOP ACTIONS DU JOUR</b>"
     await bot.send_message(chat_id=chat_id, text=header, parse_mode="HTML")
     await asyncio.sleep(1.5)
@@ -79,8 +86,8 @@ async def send_telegram_signals(top_stocks, top_etfs):
             except Exception as e:
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
 
-async def notify(top_stocks, top_etfs):
+async def notify(top_stocks, top_etfs, market_regime=None):
     """Envoi des signaux via Telegram (Asynchrone)."""
     if top_stocks.empty and top_etfs.empty:
         return
-    await send_telegram_signals(top_stocks, top_etfs)
+    await send_telegram_signals(top_stocks, top_etfs, market_regime)

@@ -137,8 +137,8 @@ def test_global_score_weights():
         "v_ok": True
     })
 
-    # Nouvelles pondérations du config.yaml : 0.40, 0.25, 0.35
-    expected = 80 * 0.40 + 60 * 0.25 + 90 * 0.35 # 32 + 15 + 31.5 = 78.5
+    # Nouvelles pondérations alignées avec les specs : 0.35, 0.30, 0.35
+    expected = 80 * 0.35 + 60 * 0.30 + 90 * 0.35 # 28 + 18 + 31.5 = 77.5
 
     # On simule le calcul du main engine
     from scanner.config import CONFIG

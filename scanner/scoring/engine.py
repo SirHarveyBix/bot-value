@@ -174,7 +174,7 @@ def stock_scoring_pipeline(all_data, symbols):
         df["rank_perf_6m"].fillna(0) * mw["perf_6m"] +
         df["rank_outperf_6m"].fillna(0) * mw["outperf_6m"] +
         df["rank_perf_3m"].fillna(0) * mw["perf_3m"] +
-        df["rank_surprise"].fillna(0) * mw["sales_growth"]
+        df["rank_surprise"].fillna(0) * mw["surprise_earnings"]
     )
 
     df["score_momentum"] = df.apply(lambda r: apply_momentum_penalties(r["score_momentum"], r), axis=1)

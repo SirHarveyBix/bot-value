@@ -14,7 +14,7 @@ async def test_full_pipeline_vcr():
     Test d'intégration complet utilisant VCR.py pour l'isolation réseau.
     Simule une exécution un jour de bourse normal (mercredi 15 janv 2025).
     """
-    with freeze_time("2025-01-15 10:00:00"):
+    with freeze_time("2025-01-15 10:00:00", tick=True):
         # 0. Market Gate
         market_history = await fetch_market_indices()
         assert not market_history.empty
