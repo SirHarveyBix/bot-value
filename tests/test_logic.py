@@ -1,8 +1,15 @@
 import pandas as pd
-from datetime import date
+from datetime import date, datetime, timedelta
 from freezegun import freeze_time
+from unittest.mock import patch, MagicMock
 
-from scanner.filters import filter_post_scoring
+from scanner.filters import (
+    check_batch_data_ratio,
+    check_data_ratio,
+    data_freshness_check,
+    earnings_calendar_check,
+    filter_post_scoring,
+)
 from scanner.scoring.engine import compute_momentum_weights, compute_percentile_ranks
 from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics, compute_analyst_revision_3m
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
@@ -542,3 +549,137 @@ def test_analyst_revision_computation():
 
     zero_prev = [{"estimatedEpsAvg": 1.0}, {"estimatedEpsAvg": 0.0}]
     assert compute_analyst_revision_3m(zero_prev) is None
+
+
+# ── data_freshness_check ──────────────────────────────────────────────────────
+
+@freeze_time("2026-05-19")
+def test_data_freshness_stale():
+    """mostRecentQuarter vieux de 200j → is_fresh=False."""
+    stale_ts = (datetime(2026, 5, 19) - timedelta(days=200)).timestamp()
+    is_fresh, _, reason = data_freshness_check({"mostRecentQuarter": stale_ts})
+    assert not is_fresh
+    assert "200" in reason
+
+
+@freeze_time("2026-05-19")
+def test_data_freshness_warning():
+    """mostRecentQuarter vieux de 150j → is_fresh=True, has_warning=True."""
+    warn_ts = (datetime(2026, 5, 19) - timedelta(days=150)).timestamp()
+    is_fresh, has_warning, _ = data_freshness_check({"mostRecentQuarter": warn_ts})
+    assert is_fresh
+    assert has_warning
+
+
+@freeze_time("2026-05-19")
+def test_data_freshness_fresh():
+    """mostRecentQuarter vieux de 30j → is_fresh=True, has_warning=False."""
+    fresh_ts = (datetime(2026, 5, 19) - timedelta(days=30)).timestamp()
+    is_fresh, has_warning, _ = data_freshness_check({"mostRecentQuarter": fresh_ts})
+    assert is_fresh
+    assert not has_warning
+
+
+def test_data_freshness_no_timestamp():
+    """mostRecentQuarter=None → is_fresh=True, has_warning=True (date inconnue)."""
+    is_fresh, has_warning, _ = data_freshness_check({"mostRecentQuarter": None})
+    assert is_fresh
+    assert has_warning
+
+
+def test_data_freshness_empty_info():
+    """info None → is_fresh=False."""
+    is_fresh, _, _ = data_freshness_check(None)
+    assert not is_fresh
+
+
+# ── check_batch_data_ratio ────────────────────────────────────────────────────
+
+def test_check_batch_data_ratio_pass():
+    """7 tickers / eligible=10 → ratio=0.7 ≥ 0.6 → True."""
+    tickers = [f"T{i}" for i in range(7)]
+    cols = pd.MultiIndex.from_tuples([(t, "Close") for t in tickers])
+    df = pd.DataFrame(columns=cols)
+    assert check_batch_data_ratio(df, 10)
+
+
+def test_check_batch_data_ratio_fail():
+    """5 tickers / eligible=10 → ratio=0.5 < 0.6 → False."""
+    tickers = [f"T{i}" for i in range(5)]
+    cols = pd.MultiIndex.from_tuples([(t, "Close") for t in tickers])
+    df = pd.DataFrame(columns=cols)
+    assert not check_batch_data_ratio(df, 10)
+
+
+def test_check_batch_data_ratio_zero_eligible():
+    """eligible_count=0 → False (early return)."""
+    assert not check_batch_data_ratio(pd.DataFrame(), 0)
+
+
+# ── check_data_ratio ──────────────────────────────────────────────────────────
+
+def test_check_data_ratio_pass():
+    """7 valides / 10 → ratio=0.7 ≥ 0.6 → True."""
+    all_data = {f"T{i}": {"info": {"longName": f"Corp{i}"}} for i in range(7)}
+    all_data.update({f"X{i}": {"info": None} for i in range(3)})
+    assert check_data_ratio(all_data, 10)
+
+
+def test_check_data_ratio_fail():
+    """4 valides / 10 → ratio=0.4 < 0.6 → False."""
+    all_data = {f"T{i}": {"info": {"longName": f"Corp{i}"}} for i in range(4)}
+    all_data.update({f"X{i}": {"info": None} for i in range(6)})
+    assert not check_data_ratio(all_data, 10)
+
+
+def test_check_data_ratio_zero_eligible():
+    """eligible_count=0 → False."""
+    assert not check_data_ratio({}, 0)
+
+
+# ── earnings_calendar_check ───────────────────────────────────────────────────
+
+def test_earnings_calendar_none():
+    """ticker.calendar=None → retourne None sans exception."""
+    mock_ticker = MagicMock()
+    mock_ticker.calendar = None
+    with patch("scanner.filters.yf.Ticker", return_value=mock_ticker):
+        assert earnings_calendar_check("AAPL") is None
+
+
+@freeze_time("2026-05-19")
+def test_earnings_calendar_soon():
+    """Earnings dans 7j → retourne la date formatée."""
+    next_date = datetime(2026, 5, 26)
+    mock_ticker = MagicMock()
+    mock_ticker.calendar = {"Earnings Date": [next_date]}
+    with patch("scanner.filters.yf.Ticker", return_value=mock_ticker):
+        result = earnings_calendar_check("AAPL")
+    assert result == "2026-05-26"
+
+
+@freeze_time("2026-05-19")
+def test_earnings_calendar_far_future():
+    """Earnings dans 30j → hors fenêtre 14j → retourne None."""
+    next_date = datetime(2026, 6, 18)
+    mock_ticker = MagicMock()
+    mock_ticker.calendar = {"Earnings Date": [next_date]}
+    with patch("scanner.filters.yf.Ticker", return_value=mock_ticker):
+        result = earnings_calendar_check("AAPL")
+    assert result is None
+
+
+# ── is_market_open ────────────────────────────────────────────────────────────
+
+@freeze_time("2026-05-18")
+def test_is_market_open_weekday():
+    """Lundi 2026-05-18 → NYSE ouvert."""
+    from main import is_market_open
+    assert is_market_open()
+
+
+@freeze_time("2026-05-17")
+def test_is_market_open_weekend():
+    """Dimanche 2026-05-17 → NYSE fermé."""
+    from main import is_market_open
+    assert not is_market_open()
