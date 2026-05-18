@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import random
+from datetime import datetime
 import httpx
 import pandas as pd
 import yfinance as yf
@@ -97,6 +100,16 @@ async def fetch_fmp_data(client, symbol):
 
                     analyst_revision_3m = compute_analyst_revision_3m(a_data) if a_data else None
 
+                    # Gap 2: date FMP → timestamp compatible data_freshness_check (filters.py)
+                    most_recent_quarter_ts = None
+                    if is_data and len(is_data) > 0:
+                        date_str = is_data[0].get("date")
+                        if date_str:
+                            try:
+                                most_recent_quarter_ts = datetime.fromisoformat(date_str).timestamp()
+                            except ValueError:
+                                pass
+
                     roe_3y = None
                     if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
                         roes = []
@@ -128,6 +141,7 @@ async def fetch_fmp_data(client, symbol):
                         "surprise_pct": surprise_pct,
                         "surprise_date": surprise_date,
                         "analyst_revision_3m": analyst_revision_3m,
+                        "mostRecentQuarter": most_recent_quarter_ts,
                         "source": "FMP",
                     }
             return None

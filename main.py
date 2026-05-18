@@ -123,6 +123,21 @@ async def run_scanner(force=False):
         }
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
+        # Gap 1: enrichir top_10_stocks avec first_seen_date depuis SQLite avant notify
+        if not top_10_stocks.empty:
+            import sqlite3 as _sqlite3
+            from scanner.storage import DB_PATH, get_first_seen_date
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            try:
+                _conn = _sqlite3.connect(DB_PATH)
+                top_10_stocks = top_10_stocks.copy()
+                top_10_stocks["first_seen_date"] = top_10_stocks["symbol"].apply(
+                    lambda s: get_first_seen_date(_conn, s) or today_str
+                )
+                _conn.close()
+            except Exception as _e:
+                logger.warning(f"Impossible de lire first_seen_date depuis SQLite: {_e}")
+
         # 9. Notify — T002: Bug 1 fix (market_regime=market_regime, pas regime)
         await notify(top_10_stocks, top_5_etfs, market_regime=market_regime)
 
