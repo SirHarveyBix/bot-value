@@ -6,15 +6,15 @@ import pandas_market_calendars as mcal
 from apscheduler import AsyncScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone
+import sqlite3 as _sqlite3
 
 from scanner.config import CONFIG, logger
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.notifier import notify, notify_panic
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
-from scanner.storage import save_scan_entry, save_signals, update_signal_returns
+from scanner.storage import save_scan_entry, save_signals, update_signal_returns, DB_PATH, get_first_seen_date
 from scanner.universe import build_eligible_universe, load_universe
-
 
 def is_market_open():
     """Vérifie si le NYSE est ouvert aujourd'hui."""
@@ -122,6 +122,19 @@ async def run_scanner(force=False):
             "vix": current_vix
         }
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
+
+        # Gap 1: enrichir top_10_stocks avec first_seen_date depuis SQLite avant notify
+        if not top_10_stocks.empty:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            try:
+                _conn = _sqlite3.connect(DB_PATH)
+                top_10_stocks = top_10_stocks.copy()
+                top_10_stocks["first_seen_date"] = top_10_stocks["symbol"].apply(
+                    lambda s: get_first_seen_date(_conn, s) or today_str
+                )
+                _conn.close()
+            except Exception as _e:
+                logger.warning(f"Impossible de lire first_seen_date depuis SQLite: {_e}")
 
         # 9. Notify — T002: Bug 1 fix (market_regime=market_regime, pas regime)
         await notify(top_10_stocks, top_5_etfs, market_regime=market_regime)

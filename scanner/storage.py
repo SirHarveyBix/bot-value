@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import sqlite3
 from datetime import datetime
@@ -196,7 +198,7 @@ def save_signals(top_stocks, top_etfs, all_data, universe_size, market_data=None
 
 async def update_signal_returns():
     """
-    Job de fond 18h00 ET : met à jour price_30d_later et return_30d (Lacune 11).
+    Job de fond 18h00 ET : met à jour price_30d_later/return_30d et price_90d_later/return_90d.
     Utilise yfinance uniquement — aucun appel FMP.
     """
     import yfinance as yf
@@ -205,13 +207,20 @@ async def update_signal_returns():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
 
-    rows = conn.execute(
+    rows_30d = conn.execute(
         "SELECT id, symbol, price_at_signal FROM signals "
         "WHERE price_30d_later IS NULL AND price_at_signal IS NOT NULL "
         "AND first_seen_date <= date('now', '-30 days')"
     ).fetchall()
 
-    for row_id, symbol, price_at_signal in rows:
+    rows_90d = conn.execute(
+        "SELECT id, symbol, price_at_signal FROM signals "
+        "WHERE price_90d_later IS NULL AND price_at_signal IS NOT NULL "
+        "AND first_seen_date <= date('now', '-90 days')"
+    ).fetchall()
+
+    updated = 0
+    for row_id, symbol, price_at_signal in rows_30d:
         try:
             ticker = yf.Ticker(symbol)
             hist = await asyncio.to_thread(ticker.history, period="1d")
@@ -223,9 +232,26 @@ async def update_signal_returns():
                 "UPDATE signals SET price_30d_later = ?, return_30d = ? WHERE id = ?",
                 (price_now, return_30d, row_id)
             )
+            updated += 1
         except Exception as e:
-            logger.warning(f"update_signal_returns: erreur pour {symbol}: {e}")
+            logger.warning(f"update_signal_returns 30d: erreur pour {symbol}: {e}")
+
+    for row_id, symbol, price_at_signal in rows_90d:
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = await asyncio.to_thread(ticker.history, period="1d")
+            if hist.empty:
+                continue
+            price_now = float(hist["Close"].iloc[-1])
+            return_90d = (price_now - price_at_signal) / price_at_signal
+            conn.execute(
+                "UPDATE signals SET price_90d_later = ?, return_90d = ? WHERE id = ?",
+                (price_now, return_90d, row_id)
+            )
+            updated += 1
+        except Exception as e:
+            logger.warning(f"update_signal_returns 90d: erreur pour {symbol}: {e}")
 
     conn.commit()
     conn.close()
-    logger.info(f"Retours 30j mis à jour ({len(rows)} signaux traités).")
+    logger.info(f"Retours 30j/90j mis à jour ({updated} mises à jour sur {len(rows_30d)+len(rows_90d)} signaux).")

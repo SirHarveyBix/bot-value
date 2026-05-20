@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import random
+from datetime import datetime
 import httpx
 import pandas as pd
 import yfinance as yf
@@ -7,6 +10,7 @@ import yfinance as yf
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
 from scanner.scoring.momentum import compute_analyst_revision_3m
+from scanner.notifier import notify_fmp_unavailable
 
 # TTL en secondes
 TTL_FUNDAMENTALS = 24 * 3600
@@ -97,6 +101,16 @@ async def fetch_fmp_data(client, symbol):
 
                     analyst_revision_3m = compute_analyst_revision_3m(a_data) if a_data else None
 
+                    # Gap 2: date FMP → timestamp compatible data_freshness_check (filters.py)
+                    most_recent_quarter_ts = None
+                    if is_data and len(is_data) > 0:
+                        date_str = is_data[0].get("date")
+                        if date_str:
+                            try:
+                                most_recent_quarter_ts = datetime.fromisoformat(date_str).timestamp()
+                            except ValueError:
+                                pass
+
                     roe_3y = None
                     if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
                         roes = []
@@ -128,6 +142,7 @@ async def fetch_fmp_data(client, symbol):
                         "surprise_pct": surprise_pct,
                         "surprise_date": surprise_date,
                         "analyst_revision_3m": analyst_revision_3m,
+                        "mostRecentQuarter": most_recent_quarter_ts,
                         "source": "FMP",
                     }
             return None
@@ -205,7 +220,6 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
                     "prices": prices
                 }
     except FMPUnavailableError:
-        from scanner.notifier import notify_fmp_unavailable
         await notify_fmp_unavailable()
         raise
 

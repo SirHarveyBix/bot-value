@@ -83,17 +83,22 @@ def earnings_calendar_check(symbol):
     try:
         ticker = yf.Ticker(symbol)
         calendar = ticker.calendar
-        if calendar is not None and not calendar.empty:
-            # yfinance returns a DataFrame with 'Earnings Date' or similar
-            # structure varies, but usually it's a dict or DF
-            if isinstance(calendar, dict) and "Earnings Date" in calendar:
-                dates = calendar["Earnings Date"]
-                if dates:
-                    next_date = dates[0]
-                    # Vérifier si c'est dans les 14 prochains jours
-                    delta = (next_date.date() - datetime.now().date()).days
-                    if 0 <= delta <= 14:
-                        return next_date.strftime("%Y-%m-%d")
+        if calendar is None:
+            return None
+
+        dates = None
+        if isinstance(calendar, dict):
+            dates = calendar.get("Earnings Date", [])
+        elif hasattr(calendar, "empty"):
+            if calendar.empty:
+                return None
+            dates = calendar.get("Earnings Date", [])
+
+        if dates:
+            next_date = dates[0]
+            delta = (next_date.date() - datetime.now().date()).days
+            if 0 <= delta <= 14:
+                return next_date.strftime("%Y-%m-%d")
         return None
     except Exception as e:
         logger.debug(f"Erreur earnings calendar pour {symbol}: {e}")
