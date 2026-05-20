@@ -11,6 +11,30 @@ from scanner.scoring.quality import apply_quality_gates, calculate_quality_metri
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
 
 
+RATIO_CLAMP: dict[str, tuple[float, float]] = {
+    "roe":              (0.0,   1.50),
+    "margin":           (-0.50, 0.60),
+    "fcf_yield":        (-0.20, 0.30),
+    "debt_ebitda":      (0.0,   10.0),
+    "pe":               (1.0,   60.0),
+    "ev_ebitda":        (0.0,   40.0),
+    "peg":              (-5.0,  5.0),
+}
+
+
+def winsorize(value: float, low: float, high: float) -> float:
+    """Clamp value dans [low, high] — traite les anomalies de parsing FMP (0.001, 999) sans exclure le ticker."""
+    return max(low, min(high, value))
+
+
+def _apply_winsorization(df: pd.DataFrame) -> pd.DataFrame:
+    """Applique RATIO_CLAMP sur toutes les colonnes de ratio présentes dans df."""
+    for col, (lo, hi) in RATIO_CLAMP.items():
+        if col in df.columns:
+            df[col] = df[col].apply(lambda v: winsorize(v, lo, hi) if pd.notna(v) else v)
+    return df
+
+
 def compute_percentile_ranks(df, column, ascending=True):
     """Calcule le percentile rank (0-100) pour une colonne."""
     if isinstance(df, pd.Series):
@@ -158,6 +182,9 @@ def stock_scoring_pipeline(all_data, symbols):
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
+
+    # Winsorisation des ratios bruts avant tout percentile ranking (anti-anomalies parsing FMP)
+    df = _apply_winsorization(df)
 
     # Ranking intra-secteur
     df["rank_roe"] = compute_percentile_ranks(df, "roe")
