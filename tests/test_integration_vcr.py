@@ -1,3 +1,4 @@
+import sys
 import pytest
 import os
 import pandas as pd
@@ -129,6 +130,7 @@ async def test_fmp_budget_counter():
 
 
 # T043 — Pipeline panic : VIX=40 → 0 signaux, notify_panic appelé
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="pandas_market_calendars 4.4+ requiert Python 3.10+")
 @pytest.mark.asyncio
 async def test_full_pipeline_panic_regime():
     """
