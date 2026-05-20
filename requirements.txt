@@ -7,7 +7,7 @@ numpy>=1.26.0,<2.0.0
 
 # Scheduling
 apscheduler>=4.0.0a5
-pandas-market-calendars>=4.3.0
+pandas-market-calendars>=4.3.0,<4.4.0
 
 # Alertes
 python-telegram-bot>=21.0,<22.0

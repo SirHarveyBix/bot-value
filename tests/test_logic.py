@@ -1,3 +1,5 @@
+import sys
+import pytest
 import pandas as pd
 from datetime import date, datetime, timedelta
 from freezegun import freeze_time
@@ -671,6 +673,7 @@ def test_earnings_calendar_far_future():
 
 # ── is_market_open ────────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="pandas_market_calendars 4.4+ requiert Python 3.10+")
 @freeze_time("2026-05-18")
 def test_is_market_open_weekday():
     """Lundi 2026-05-18 → NYSE ouvert."""
@@ -678,6 +681,7 @@ def test_is_market_open_weekday():
     assert is_market_open()
 
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="pandas_market_calendars 4.4+ requiert Python 3.10+")
 @freeze_time("2026-05-17")
 def test_is_market_open_weekend():
     """Dimanche 2026-05-17 → NYSE fermé."""
