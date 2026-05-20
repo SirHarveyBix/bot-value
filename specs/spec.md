@@ -1,6 +1,6 @@
 # Spec — ValueMomentum Scanner
 
-### Version 1.0 — Document de référence pour développement IA
+### Version 1.0 (Production) — v1.1 en cours — Document de référence pour développement IA
 
 ---
 
@@ -379,6 +379,8 @@ async def fetch_prices_chunked(tickers: list[str], period: str = "1y") -> dict:
 
 > **Pourquoi `threads=False` en interne** : `yf.download(threads=True)` ouvre plusieurs connexions simultanées vers Yahoo Finance depuis le même IP. Combiné à ~700 tickers, cela simule une attaque DDoS du point de vue des serveurs Yahoo, déclenchant un ban immédiat. Avec `threads=False` + chunks de 100 + pause 2s, le profil de requêtes ressemble à un navigateur humain naviguant rapidement — acceptable pour Yahoo Finance.
 
+> **Adjusted Close obligatoire pour le Momentum** : `auto_adjust=True` garantit que les prix utilisés pour le calcul du Momentum sont ajustés des splits et dividendes. Sans cela, un split 3-pour-1 génère une chute apparente de 66% — faux signal d'effondrement qui polluerait le ranking. Ce paramètre est non-négociable et doit rester actif dans tous les appels `yf.download()`.
+
 > **Session User-Agent rotatif** : Pour réduire davantage le risque de détection, les sessions yfinance peuvent être instanciées avec des User-Agents différents par chunk (via `yf.Ticker._session`). En v1.0, la rotation est optionnelle — la stratégie de chunking seule est suffisante pour l'univers ~700 tickers.
 
 > **Fallback batch partiel** : Si un chunk retourne < 60% de tickers valides (`len(valid) / len(chunk) < 0.6`), logguer `⚠️ batch_partial_failure` et continuer — ne pas annuler le scan entier pour un chunk défaillant. Si **tous** les chunks échouent sous 60% : déclencher l'arrêt du scan + alerte Telegram erreur yfinance (cf. §13.4).
@@ -411,6 +413,46 @@ def is_valid_ticker_data(data: dict) -> bool:
 
 > **Important** : `"regularMarketPrice" in data` est insuffisant — la clé peut exister avec valeur None. Toujours utiliser `.get()` + check de valeur.
 
+**_(v1.1)_ Validation stricte des réponses FMP via Pydantic**
+
+Les réponses JSON de FMP contiennent fréquemment des `null`, des strings ou des valeurs aberrantes à la place de floats attendus. Une validation Pydantic isole l'erreur sur le ticker défectueux sans corrompre le pipeline de percentiles.
+
+```python
+from pydantic import BaseModel
+from typing import Optional
+
+class FMPRatiosTTM(BaseModel):
+    peRatioTTM: Optional[float] = None
+    enterpriseValueMultipleTTM: Optional[float] = None  # EV/EBITDA
+    pegRatioTTM: Optional[float] = None
+    operatingProfitMarginTTM: Optional[float] = None
+    returnOnEquityTTM: Optional[float] = None
+    freeCashFlowTTM: Optional[float] = None
+
+    class Config:
+        extra = "allow"  # Ignorer les champs inconnus sans erreur
+
+class FMPKeyMetricsTTM(BaseModel):
+    roicTTM: Optional[float] = None               # ROIC — v1.1
+    freeCashFlowYieldTTM: Optional[float] = None
+
+    class Config:
+        extra = "allow"
+
+def parse_fmp_response(raw: list | dict, model_class, ticker: str):
+    """Parse le premier élément d'une réponse FMP. Retourne None si invalide."""
+    if not raw:
+        return None
+    item = raw[0] if isinstance(raw, list) else raw
+    try:
+        return model_class(**item)
+    except Exception as e:
+        logger.warning(f"FMP parse error [{ticker}] {model_class.__name__}: {e}")
+        return None
+```
+
+> **Pourquoi Pydantic et non un simple `try/except`** : Une validation naïve échoue silencieusement si FMP retourne une string `"N/A"` à la place d'un float. Pydantic convertit les types compatibles et lève une erreur explicite pour les cas irrecouvrables — le ticker est skippé, le pipeline continue.
+
 ### 2.4 Cache
 
 ```python
@@ -418,7 +460,7 @@ CACHE_TTL_FUNDAMENTALS = 27 * 3600   # 27h — voir note race condition ci-desso
 CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
 ```
 
-> **⚠️ Race condition TTL à 24h** : Le scan se déclenche à 09h35 ET. Un cache créé à 09h32 la veille expire exactement à 09h32 le lendemain — 3 minutes *avant* le prochain scan. Toute la shortlist de 30 tickers déclenche simultanément 210 appels FMP à 09h35 ET, annulant le bénéfice du cache et consommant l'intégralité du quota en un seul run. TTL à **27h** garantit que le cache reste valide pour le scan suivant, quel que soit le délai d'exécution réel (congestion réseau, retry, heure d'été/hiver). La valeur `97200s` (27×3600) est la valeur de référence dans `config.yaml`.
+> **⚠️ Race condition TTL à 24h** : Le scan se déclenche à 09h35 ET. Un cache créé à 09h32 la veille expire exactement à 09h32 le lendemain — 3 minutes _avant_ le prochain scan. Toute la shortlist de 30 tickers déclenche simultanément 210 appels FMP à 09h35 ET, annulant le bénéfice du cache et consommant l'intégralité du quota en un seul run. TTL à **27h** garantit que le cache reste valide pour le scan suivant, quel que soit le délai d'exécution réel (congestion réseau, retry, heure d'été/hiver). La valeur `97200s` (27×3600) est la valeur de référence dans `config.yaml`.
 
 **Invalidation post-earnings** : si un ticker est dans l'earnings calendar avec date = J-1 (résultats publiés la veille), son cache fondamentaux est invalidé forcément avant le scan.
 
@@ -489,14 +531,17 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 
 #### PILIER 1 : QUALITÉ (pondération 35%)
 
-| Métrique             | Source               | Calcul                                                             | Ranking            |
-| -------------------- | -------------------- | ------------------------------------------------------------------ | ------------------ |
-| ROE (Moyenne 3 ans)  | **API FMP (Sniper)** | Moyenne du ROE sur les 3 derniers bilans (income + balance)        | Cross-universe     |
-| Marge opérationnelle | **API FMP (Sniper)** | `operatingProfitMarginTTM` via `ratios-ttm`                        | Intra-secteur GICS |
-| Dette nette / EBITDA | **API FMP (Sniper)** | `netDebt` / `ebitda` — exclus : Financials, Real Estate, Utilities | Cross-universe     |
-| FCF Yield proxy      | **API FMP (Sniper)** | `freeCashFlowTTM` (key-metrics-ttm) / marketCap                    | Cross-universe     |
+| Métrique                      | Source               | Calcul                                                                      | Ranking            |
+| ----------------------------- | -------------------- | --------------------------------------------------------------------------- | ------------------ |
+| ROE / ROIC composite _(v1.1)_ | **API FMP (Sniper)** | `0.6 × ROE_3y_avg + 0.4 × roicTTM` (key-metrics-ttm, 0 call supplémentaire) | Cross-universe     |
+| ROE (Moyenne 3 ans) _(v1.0)_  | **API FMP (Sniper)** | Moyenne du ROE sur les 3 derniers bilans (income + balance)                 | Cross-universe     |
+| Marge opérationnelle          | **API FMP (Sniper)** | `operatingProfitMarginTTM` via `ratios-ttm`                                 | Intra-secteur GICS |
+| Dette nette / EBITDA          | **API FMP (Sniper)** | `netDebt` / `ebitda` — exclus : Financials, Real Estate, Utilities          | Cross-universe     |
+| FCF Yield proxy               | **API FMP (Sniper)** | `freeCashFlowTTM` (key-metrics-ttm) / marketCap                             | Cross-universe     |
 
 > **Note ROE** : L'utilisation du ROE TTM est proscrite car potentiellement faussée par des effets de levier ou des cessions exceptionnelles. Le calcul moyen sur 3 ans est **obligatoire** et récupéré via les endpoints `income-statement` et `balance-sheet-statement` de l'API FMP.
+
+> **_(v1.1)_ ROE / ROIC composite** : Le ROE peut être artificiellement gonflé par l'effet de levier (rachat d'actions massif réduit le Book Equity jusqu'à zéro, produisant des ROE de 200-500%). Le ROIC (Return on Invested Capital) = `EBIT × (1-t) / (Equity + Debt - Cash)` est neutre vis-à-vis de la structure du capital. En v1.1, le critère ROE devient un composite `0.6 × ROE_3y + 0.4 × roicTTM`. Le champ `roicTTM` est disponible dans `key-metrics-ttm` (endpoint déjà appelé — 0 call FMP supplémentaire). En v1.0, utiliser le ROE 3 ans seul.
 
 > **Note secteurs exclus du calcul dette/EBITDA** : Financières (banques, assurances) et REITs ont des structures bilancielles incompatibles avec ce ratio. Traitement spécifique documenté en section 4.4.
 
@@ -534,7 +579,7 @@ def winsorize(value: float, low: float, high: float) -> float:
 
 **Score Qualité** = moyenne pondérée des 4 percentile rangs
 
-- ROE (Moyenne 3 ans) : 40%
+- ROE (Moyenne 3 ans) : 40% _(v1.0)_ → ROE/ROIC composite : 40% _(v1.1, mêmes pondérations)_
 - Marge opérationnelle : 35%
 - FCF Yield proxy : 15%
 - Dette/EBITDA (inversé) : 10%
@@ -575,13 +620,25 @@ def winsorize(value: float, low: float, high: float) -> float:
 
 #### PILIER 3 : MOMENTUM (pondération 35%)
 
-| Métrique                          | Calcul                                            | Source                   | Ranking        |
-| --------------------------------- | ------------------------------------------------- | ------------------------ | -------------- |
-| Performance 6 mois                | (Prix J0 - Prix J-126) / Prix J-126               | yfinance                 | Cross-universe |
-| Surperformance sectorielle 6M     | Perf 6M ticker - Perf 6M ETF sectoriel SPDR       | yfinance                 | Intra-secteur  |
-| Performance 3 mois                | (Prix J0 - Prix J-63) / Prix J-63                 | yfinance                 | Cross-universe |
-| Surprise Earnings % (Sniper)      | (BPA Publié - BPA Attendu) / BPA Attendu          | FMP `earnings-surprises` | Cross-universe |
-| Révision estimations analystes 3M | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates`  | Cross-universe |
+| Métrique                            | Calcul                                            | Source                   | Ranking        |
+| ----------------------------------- | ------------------------------------------------- | ------------------------ | -------------- |
+| Momentum ajusté volatilité _(v1.1)_ | `Return_6M / σ_daily_6M` — voir note ci-dessous   | yfinance                 | Cross-universe |
+| Performance 6 mois _(v1.0)_         | `(Prix J0 - Prix J-126) / Prix J-126`             | yfinance                 | Cross-universe |
+| Surperformance sectorielle 6M       | Perf 6M ticker - Perf 6M ETF sectoriel SPDR       | yfinance                 | Intra-secteur  |
+| Performance 3 mois                  | `(Prix J0 - Prix J-63) / Prix J-63`               | yfinance                 | Cross-universe |
+| Surprise Earnings % (Sniper)        | (BPA Publié - BPA Attendu) / BPA Attendu          | FMP `earnings-surprises` | Cross-universe |
+| Révision estimations analystes 3M   | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates`  | Cross-universe |
+
+> **_(v1.1)_ Momentum ajusté par la volatilité (Daniel & Moskowitz, 2016)** : Un momentum "brut" expose au _Momentum Crash_ — des actifs en hausse parabolique (momentum élevé + volatilité élevée) s'effondrent brutalement lors des retournements. Diviser la performance brute par l'écart-type quotidien récompense les tendances régulières et pénalise les hausses spéculatives.
+>
+> ```python
+> returns_daily = price_series.pct_change().dropna()
+> return_6m = (price_series.iloc[-1] / price_series.iloc[-127]) - 1  # 126 jours de bourse
+> stddev_6m = returns_daily.tail(126).std()
+> momentum_adj = return_6m / stddev_6m if stddev_6m > 0 else 0.0
+> ```
+>
+> En v1.0, utiliser `return_6m` brut. En v1.1, remplacer par `momentum_adj`. Les données sont disponibles via yfinance OHLCV — 0 appel FMP supplémentaire.
 
 > **Note Momentum Fondamental** : Deux signaux fondamentaux complémentaires :
 >
@@ -762,6 +819,29 @@ etfs_ranked : liste triée par score_etf décroissant
     → Historique complet stocké dans SQLite
 ```
 
+### 5.5 _(v1.1)_ Pondération par Inverse Volatilité (Parité de Risque)
+
+L'équipondération surexpose le portefeuille aux titres les plus nerveux du Top 10. La pondération par inverse volatilité alloue davantage de capital aux titres les plus stables.
+
+```python
+def compute_inverse_vol_weights(tickers: list[str], price_data: dict) -> dict[str, float]:
+    """σ_i = écart-type des rendements journaliers sur 60 jours."""
+    inv_vols = {}
+    for t in tickers:
+        returns = price_data[t]["Close"].pct_change().dropna().tail(60)
+        if len(returns) >= 20:
+            inv_vols[t] = 1.0 / returns.std()
+    total = sum(inv_vols.values())
+    return {t: round(w / total * 100, 1) for t, w in inv_vols.items()}
+```
+
+**Intégration (v1.1) :**
+
+- Champ `suggested_weight_pct` ajouté à la table `signals`
+- Affiché dans le message Telegram : `⚖️ Poids suggéré : [X.X]%`
+
+> **Note** : Informatif uniquement — n'impose pas de taille de position. Un titre avec σ=2% reçoit le double de poids qu'un titre σ=4%. Les données σ proviennent de yfinance OHLCV (déjà chargé) — 0 appel FMP supplémentaire.
+
 ---
 
 ## 6. Module 5 — Telegram Notifier
@@ -896,26 +976,63 @@ Telegram limite les messages à **1 message/seconde** pour un même chat. Le top
 
 ```python
 import asyncio
+import telegram
 
-async def send_signals(tickers: list):
-    for ticker_data in tickers:
-        await bot.send_message(chat_id=CHAT_ID, text=format_message(ticker_data), parse_mode="HTML")
-        await asyncio.sleep(1.5)  # Délai de sécurité asymétrique pour éviter HTTP 429
+async def send_message_safe(bot, chat_id: str, text: str) -> None:
+    """Envoi avec respect du header Retry-After sur HTTP 429 (v1.1)."""
+    while True:
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            await asyncio.sleep(1.2)  # Délai de sécurité nominal entre messages
+            return
+        except telegram.error.RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)  # Délai exact imposé par Telegram
+        except telegram.error.TelegramError as e:
+            logger.error(f"Telegram error non-récupérable: {e}")
+            raise
+```
+
+> **_(v1.1)_ Retry-After vs délai fixe** : En v1.0, un délai fixe de 1.5s est utilisé. En v1.1, l'exception `RetryAfter` de python-telegram-bot expose le header HTTP `Retry-After` — le délai exact requis par Telegram plutôt qu'une approximation. Évite les boucles inutiles sur un 429 qui nécessiterait 30 secondes d'attente.
+
+**Obligation : logging local AVANT envoi Telegram _(v1.1)_** : Tous les signaux du Top 10 DOIVENT être loggués localement en JSON AVANT toute tentative d'envoi Telegram. En cas d'inaccessibilité du bot, les signaux ne sont pas perdus.
+
+```python
+# Loguru avec sérialisation JSON native
+from loguru import logger
+
+logger.add("data/logs/signals_{time}.jsonl", serialize=True, rotation="1 day", retention="90 days")
+
+# Appeler avant send_message_safe()
+logger.info("scan_signal", ticker=ticker, score=score, rank=rank, scan_date=scan_date)
 ```
 
 **Limite de taille de message (4096 caractères)** : L'API Telegram rejette tout message dépassant 4096 caractères. Un signal avec tous les flags actifs peut approcher cette limite.
 
 ```python
+import re
 TELEGRAM_MAX_CHARS = 4096
 
-def truncate_message(text: str) -> str:
+def truncate_message_html_safe(text: str) -> str:
+    """_(v1.1)_ Troncature HTML-safe : ferme les balises ouvertes avant coupure."""
     if len(text) <= TELEGRAM_MAX_CHARS:
         return text
-    # Tronquer proprement à la dernière ligne complète sous la limite
-    truncated = text[:TELEGRAM_MAX_CHARS - 30]
+    truncated = text[:TELEGRAM_MAX_CHARS - 50]
     last_newline = truncated.rfind("\n")
-    return truncated[:last_newline] + "\n⚠️ [message tronqué]"
+    safe_cut = truncated[:last_newline]
+    # Fermer les balises HTML ouvertes non fermées
+    open_tags = []
+    for m in re.finditer(r'<(/?)(\w+)[^>]*>', safe_cut):
+        tag = m.group(2).lower()
+        if m.group(1) == '/':
+            if open_tags and open_tags[-1] == tag:
+                open_tags.pop()
+        else:
+            open_tags.append(tag)
+    closing = ''.join(f'</{t}>' for t in reversed(open_tags))
+    return safe_cut + closing + "\n⚠️ [message tronqué]"
 ```
+
+> En v1.0, utiliser `truncate_message()` simple. En v1.1, remplacer par `truncate_message_html_safe()` pour éviter les parse errors Telegram sur les balises HTML coupées.
 
 > Appliquer `truncate_message()` sur chaque message avant envoi. Si le message de synthèse ETFs dépasse 4096 chars, le split en deux messages séquentiels (Top 5 ETFs → Top 3 + Top 2).
 
@@ -1084,11 +1201,16 @@ PyYAML>=6.0.1,<7.0.0
 python-dotenv>=1.0.0,<2.0.0
 
 # Logging
-loguru>=0.7.2,<1.0.0
+loguru>=0.7.2,<1.0.0              # serialize=True pour output JSON natif (v1.1)
 
 # Utilitaires
 pytz>=2024.1                   # Requis par APScheduler 3.x
 requests>=2.31.0,<3.0.0
+
+# (v1.1) Validation, résilience, storage async
+pydantic>=2.0.0,<3.0.0            # Validation stricte réponses FMP (évite null→float silencieux)
+tenacity>=8.2.0,<9.0.0            # Exponential backoff FMP avec circuit breaker
+aiosqlite>=0.19.0,<1.0.0          # SQLite async — évite freeze Event Loop sur requêtes lourdes
 
 # Tests
 pytest>=8.0.0
@@ -1286,7 +1408,7 @@ if not TELEGRAM_BOT_TOKEN:
 ### 13.1 Stratégie de retry pour yfinance
 
 ```python
-# fetcher.py — logique de retry
+# fetcher.py — logique de retry (v1.0)
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 5
 
@@ -1303,6 +1425,28 @@ def fetch_with_retry(ticker: str) -> dict:
             time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
     return {}
 ```
+
+**_(v1.1)_ Retry FMP via tenacity (remplace la boucle manuelle) :**
+
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import httpx
+
+# Circuit-breaker implicite : si > 2 retries sur un ticker → skip, pas de 3ème tentative
+# (contrainte budget FMP 250 calls/jour — cf. §2)
+@retry(
+    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
+    stop=stop_after_attempt(2),          # FMP_MAX_RETRIES = 2
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True
+)
+async def fmp_fetch_with_tenacity(client: httpx.AsyncClient, url: str) -> dict:
+    response = await client.get(url, timeout=10.0)
+    response.raise_for_status()
+    return response.json()
+```
+
+> **Pourquoi tenacity vs retry manuel** : tenacity gère le jitter automatiquement et est composable avec d'autres décorateurs. Le `stop_after_attempt(2)` est synchronisé avec `FMP_MAX_RETRIES = 2` du §2 pour ne pas dépasser le budget 250 calls.
 
 ### 13.2 Cache des données fondamentales
 
@@ -1355,11 +1499,35 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 - [x] **Stockage SQLite** (scanner_history.db)
 - [x] **Market Gate** (Filtre SPY MA200)
 
-### v1.1
+### v1.1 — Robustesse technique & améliorations alpha
 
-- [ ] Interface HTML viewer (dynamique via FastAPI)
+**Robustesse (priorité haute — avant premier run prod) :**
+
+- [ ] Pydantic validation stricte réponses FMP — isolation erreur ticker sans corruption pipeline (§3bis.2.3)
+- [ ] Logging structuré JSON local (`loguru serialize=True`) **avant** envoi Telegram — évite perte silencieuse de signaux (§6.6)
+- [ ] `aiosqlite` pour requêtes SQLite async — évite freeze Event Loop sur requêtes lourdes (§10)
+- [ ] `tenacity` pour exponential backoff FMP — remplace retry manuel, aligné sur `FMP_MAX_RETRIES=2` (§13.1)
+- [ ] Telegram 429 → header `Retry-After` — remplace délai fixe 1.5s (§6.6)
+- [ ] Troncature HTML-safe — fermeture des balises ouvertes avant cut à 4096 chars (§6.6)
+
+**Améliorations scoring :**
+
+- [ ] Momentum ajusté par la volatilité : `return_6m / σ_daily_6m` — protection Momentum Crash Daniel & Moskowitz (§4.1 Pilier 3)
+- [ ] ROE / ROIC composite : `0.6 × ROE_3y + 0.4 × roicTTM` — neutre vis-à-vis du levier, 0 call FMP supplémentaire (§4.1 Pilier 1)
+- [ ] Inverse Volatility weighting : `suggested_weight_pct` dans `signals` + Telegram (§5.5)
+
+**Dashboard :**
+
+- [ ] Interface HTML viewer dynamique via FastAPI
 - [ ] Historique de performance des signaux (track record automatique)
 - [ ] Alertes de changement de régime de marché en temps réel
+
+### v2.0 — Extensions et intégrations
+
+- [ ] Spreads crédit HY vs Treasuries comme indicateur de régime avancé (signal Smart Money pré-panique)
+- [ ] SPY EMA 200 slope positive comme condition de gate complémentaire (anti-rebond bear)
+- [ ] Seuils dette intra-sectoriel : Z-score sectoriel vs seuil absolu (Utilities/Financials/Tech différenciés)
+- [ ] Univers global (NIFTY 50, MSCI World, CAC 40, DAX) — hors-US
 
 ---
 
