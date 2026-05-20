@@ -19,9 +19,17 @@ scanner:
   vix_panic_threshold: 35
   vix_warning_threshold: 25
   fmp_max_retries: 2
+  fmp_call_budget_hard_limit: 245
+  yfinance_chunk_size: 100
+  yfinance_chunk_delay_s: 2.0
+  cache_ttl_fundamentals: 97200
+  cache_ttl_prices: 14400
   min_universe_size: 100
   telegram_max_chars: 4096
   min_tickers_intra_sector: 3
+  data_freshness_warning_days: 120
+  data_freshness_exclusion_days: 180
+  earnings_window_days: 14
 
 scoring:
   weights:

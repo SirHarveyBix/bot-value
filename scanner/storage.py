@@ -57,12 +57,31 @@ def init_db():
         )
     ''')
 
-    # T025: Migration schema — colonnes V1 (Lacune 11)
+    # Migration schema — colonnes V1
     for stmt in _NEW_COLS:
         try:
             conn.execute(stmt)
         except sqlite3.OperationalError:
             pass
+
+    # Table scanned_universe — anti survivorship bias (backtesting out-of-sample)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scanned_universe (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_date       TEXT NOT NULL,
+            ticker          TEXT NOT NULL,
+            score_momentum  REAL,
+            rank_chalutier  INTEGER,
+            in_shortlist    INTEGER DEFAULT 0,
+            in_top10        INTEGER DEFAULT 0,
+            market_cap      REAL,
+            sector          TEXT,
+            price_at_scan   REAL
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scanned_universe_date ON scanned_universe(scan_date)"
+    )
 
     conn.commit()
     conn.close()
@@ -255,3 +274,45 @@ async def update_signal_returns():
     conn.commit()
     conn.close()
     logger.info(f"Retours 30j/90j mis à jour ({updated} mises à jour sur {len(rows_30d)+len(rows_90d)} signaux).")
+
+
+def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10_symbols: list[str], scan_date: str):
+    """
+    Stocke TOUS les tickers post-éligibilité Chalutier (pré-shortlist) dans scanned_universe.
+    Anti survivorship bias : permet le backtesting out-of-sample en comparant Top 10 vs univers entier.
+    Appelé dans main.py AVANT shortlisting, avec les champs momentum + flags in_shortlist/in_top10.
+    """
+    if eligible_df is None or eligible_df.empty:
+        return
+
+    shortlist_set = set(shortlist_symbols)
+    top10_set = set(top10_symbols)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    rows = []
+    for rank, row in enumerate(eligible_df.itertuples(), start=1):
+        symbol = getattr(row, "symbol", None)
+        if not symbol:
+            continue
+        rows.append((
+            scan_date,
+            symbol,
+            getattr(row, "m_score", None),
+            rank,
+            1 if symbol in shortlist_set else 0,
+            1 if symbol in top10_set else 0,
+            getattr(row, "market_cap", None),
+            getattr(row, "sector", None),
+            getattr(row, "price_at_scan", None),
+        ))
+
+    conn.executemany(
+        "INSERT INTO scanned_universe "
+        "(scan_date, ticker, score_momentum, rank_chalutier, in_shortlist, in_top10, market_cap, sector, price_at_scan) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"scanned_universe : {len(rows)} tickers enregistrés pour {scan_date}")

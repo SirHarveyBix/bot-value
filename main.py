@@ -9,11 +9,13 @@ from pytz import timezone
 import sqlite3 as _sqlite3
 
 from scanner.config import CONFIG, logger
+import scanner.fetcher as _fetcher
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
+from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import notify, notify_panic
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
-from scanner.storage import save_scan_entry, save_signals, update_signal_returns, DB_PATH, get_first_seen_date
+from scanner.storage import save_scan_entry, save_signals, save_scanned_universe, update_signal_returns, DB_PATH, get_first_seen_date
 from scanner.universe import build_eligible_universe, load_universe
 
 def is_market_open():
@@ -27,14 +29,17 @@ async def run_scanner(force=False):
     """Fonction principale du job de scan (asynchrone)."""
     logger.info("Déclenchement du scan quotidien...")
 
+    # Reset disjoncteur FMP à chaque scan
+    _fetcher.fmp_call_counter = 0
+
     if not force and not is_market_open():
         logger.info("Le marché NYSE est fermé aujourd'hui. Scan annulé (utilisez --force pour passer outre).")
         return
 
     try:
-        # 0. Market Gate : VIX-priority 4-level cascade (Bug 4 fix)
+        # 0. Market Gate : VIX-priority 4-level cascade
         market_history = await fetch_market_indices()
-        market_regime = "unknown"
+        regime = MarketRegime.NORMAL
         current_spy = None
         ema200 = None
         current_vix = None
@@ -47,22 +52,12 @@ async def run_scanner(force=False):
             current_spy = spy_close.iloc[-1].item()
             current_vix = vix_close.iloc[-1].item()
 
-            VIX_PANIC = CONFIG["scanner"]["vix_panic_threshold"]
-            VIX_WARN = CONFIG["scanner"]["vix_warning_threshold"]
+            regime = evaluate_market_regime(current_vix, current_spy, ema200)
+            logger.info(f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}")
 
-            if current_vix > VIX_PANIC:
-                market_regime = "panic"
-            elif current_spy < ema200 and current_vix > VIX_WARN:
-                market_regime = "prudence"
-            elif current_spy < ema200:
-                market_regime = "bear_light"
-            else:
-                market_regime = "normal"
+        market_regime = regime.value
 
-            logger.info(f"Market Gate: regime={market_regime} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}")
-
-        # T020: Panic early-return (Lacune 9 / US2)
-        if market_regime == "panic":
+        if regime == MarketRegime.PANIC:
             market_data = {
                 "regime": market_regime,
                 "spy_price": current_spy,
@@ -121,6 +116,11 @@ async def run_scanner(force=False):
         # 7. Post-Scoring Filters
         top_10_stocks = filter_post_scoring(ranked_stocks_df, all_data)
         top_5_etfs = ranked_etfs_df.head(5)
+
+        # T049: Anti survivorship bias — stocker univers Chalutier complet
+        scan_date_str = datetime.now().strftime("%Y-%m-%d")
+        top10_symbols = top_10_stocks["symbol"].tolist() if not top_10_stocks.empty else []
+        save_scanned_universe(momentum_ranked_df, shortlist_stocks, top10_symbols, scan_date=scan_date_str)
 
         # 8. Storage
         market_data = {

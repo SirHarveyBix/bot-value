@@ -342,18 +342,9 @@ def test_etf_pipeline():
 # ── Nouveaux tests T029-T041 ──────────────────────────────────────────────────
 
 def _make_market_regime(current_vix, current_spy, ema200):
-    """Reproduit la logique cascade VIX de main.py."""
-    from scanner.config import CONFIG
-    VIX_PANIC = CONFIG["scanner"]["vix_panic_threshold"]
-    VIX_WARN = CONFIG["scanner"]["vix_warning_threshold"]
-    if current_vix > VIX_PANIC:
-        return "panic"
-    elif current_spy < ema200 and current_vix > VIX_WARN:
-        return "prudence"
-    elif current_spy < ema200:
-        return "bear_light"
-    else:
-        return "normal"
+    """Délègue à evaluate_market_regime — teste le vrai module."""
+    from scanner.market_gate import evaluate_market_regime
+    return evaluate_market_regime(current_vix, current_spy, ema200).value
 
 
 # T029

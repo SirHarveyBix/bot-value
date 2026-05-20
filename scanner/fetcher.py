@@ -12,9 +12,12 @@ from scanner.config import CONFIG, logger
 from scanner.scoring.momentum import compute_analyst_revision_3m
 from scanner.notifier import notify_fmp_unavailable
 
-# TTL en secondes
-TTL_FUNDAMENTALS = 24 * 3600
-TTL_PRICES = 4 * 3600
+# TTL depuis config (anti race-condition : 27h > 24h pour éviter expiration 3 min avant scan 09h35)
+TTL_FUNDAMENTALS = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)
+TTL_PRICES = CONFIG["scanner"].get("cache_ttl_prices", 14400)
+
+# Disjoncteur global FMP — réinitialisé à chaque scan dans main.py
+fmp_call_counter: int = 0
 
 SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "XLU", "XLC", "SPY"]
 
@@ -26,33 +29,76 @@ class FMPUnavailableError(Exception):
 
 async def fetch_prices_batch(tickers, period="1y"):
     """
-    Télécharge les prix historiques pour une liste de tickers via yfinance.
-    Délégué à un thread pour ne pas bloquer l'event loop.
+    Télécharge les prix OHLCV par chunks pour éviter le ban IP yfinance (HTTP 429).
+    Chunks de YFINANCE_CHUNK_SIZE tickers max + pause YFINANCE_CHUNK_DELAY_S entre chunks.
+    threads=False : évite les connexions simultanées qui déclenchent le ban.
     """
     if not tickers:
         return pd.DataFrame()
 
-    logger.info(f"Téléchargement des prix pour {len(tickers)} tickers...")
-    try:
-        data = await asyncio.to_thread(
-            yf.download,
-            tickers=" ".join(tickers),
-            period=period,
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True
-        )
-        return data
-    except Exception as e:
-        logger.error(f"Erreur lors du batch download: {e}")
+    chunk_size = CONFIG["scanner"].get("yfinance_chunk_size", 100)
+    chunk_delay = CONFIG["scanner"].get("yfinance_chunk_delay_s", 2.0)
+    min_valid_ratio = CONFIG["scanner"].get("min_valid_data_ratio", 0.60)
+    chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
+
+    logger.info(f"Téléchargement des prix pour {len(tickers)} tickers en {len(chunks)} chunk(s) de {chunk_size}...")
+
+    all_frames = []
+    failed_chunks = 0
+
+    for idx, chunk in enumerate(chunks):
+        try:
+            data = await asyncio.to_thread(
+                yf.download,
+                tickers=" ".join(chunk),
+                period=period,
+                group_by="ticker",
+                auto_adjust=True,
+                progress=False,
+                threads=False,  # Pas de multi-thread interne (amplifie les 429)
+            )
+            if not data.empty:
+                valid_count = sum(
+                    1 for s in chunk
+                    if isinstance(data.columns, pd.MultiIndex) and s in data.columns.get_level_values(0)
+                )
+                if valid_count / len(chunk) < min_valid_ratio:
+                    logger.warning(f"Chunk {idx + 1}/{len(chunks)} : batch_partial_failure ({valid_count}/{len(chunk)} valides)")
+                    failed_chunks += 1
+                all_frames.append(data)
+        except Exception as e:
+            logger.error(f"Erreur chunk {idx + 1}/{len(chunks)}: {e}")
+            failed_chunks += 1
+
+        if idx < len(chunks) - 1:
+            await asyncio.sleep(chunk_delay)
+
+    if failed_chunks == len(chunks):
+        logger.error("Tous les chunks ont échoué — fetch yfinance impossible")
         return pd.DataFrame()
+
+    if not all_frames:
+        return pd.DataFrame()
+
+    return pd.concat(all_frames, axis=1) if len(all_frames) > 1 else all_frames[0]
 
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
     Lève FMPUnavailableError si clé absente ou 5xx persistant après fmp_max_retries.
+    Respecte le disjoncteur global fmp_call_counter (hard limit 245 calls/run).
     """
+    global fmp_call_counter
+
+    budget_limit = CONFIG["scanner"].get("fmp_call_budget_hard_limit", 245)
+    # 7 endpoints par ticker — vérifier marge avant de commencer
+    if fmp_call_counter + 7 > budget_limit:
+        logger.warning(
+            f"Budget FMP atteint ({fmp_call_counter} calls) — skip {symbol} "
+            f"(disjoncteur {budget_limit} calls)"
+        )
+        return None
+
     api_key = CONFIG["scanner"].get("fmp_api_key")
     base_url = CONFIG["scanner"].get("fmp_base_url")
 
@@ -63,6 +109,7 @@ async def fetch_fmp_data(client, symbol):
 
     for attempt in range(max_retries):
         try:
+            fmp_call_counter += 7  # 7 endpoints par ticker
             responses = await asyncio.gather(
                 client.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}"),
                 client.get(f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}"),
