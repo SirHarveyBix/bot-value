@@ -11,6 +11,10 @@ data/logs/
 data/signals/
 !data/universe/tickers_universe.json
 
+# Agent / IDE local config (non partageable)
+.claude/
+.antigravitycli/
+
 # IDEs
 .vscode/
 .idea/

@@ -1,10 +1,12 @@
-# Équipe ValueMomentum Scanner 🤖
+# Équipe ValueMomentum Scanner
 
-Ce document définit les rôles et les responsabilités de l'équipe travaillant sur le bot. Chaque membre apporte une perspective unique pour garantir la qualité, la rentabilité et la robustesse du projet.
+Ce document définit les rôles et responsabilités de l'équipe travaillant sur le bot. Les rôles détaillés sont dans `.agents/roles/`.
 
 ---
 
-## 📋 Product Owner (PO)
+## Rôles
+
+### Product Owner (PO)
 
 **Mission :** Garantir que le bot répond aux besoins métier et respecte les spécifications.
 
@@ -12,44 +14,65 @@ Ce document définit les rôles et les responsabilités de l'équipe travaillant
 - Supervise la qualité des données via l'API FMP (Sniper).
 - S'assure que les ratios de données (Chalutier & Sniper) sont respectés.
 
-## 📈 Trader Expert ValueMomentum
+Rôle complet : `.agents/roles/po.md`
+
+### Trader Expert ValueMomentum
 
 **Mission :** Maximiser la performance de la stratégie et minimiser les risques.
 
-- Pilote le **Market Gate (SPY MA200)** pour protéger le capital.
+- Pilote le **Market Gate** (cascade 4 niveaux : normal / bear_light / prudence / panic).
 - Valide les seuils de liquidité institutionnels (Cap 2B$, Volume 5M$).
 - Analyse le **ROE 3 ans** pour confirmer le Moat structurel des entreprises.
 
-## 🏗️ Lead Developer
+Rôle complet : `.agents/roles/trader.md`
+
+### Lead Developer
 
 **Mission :** Garantir l'architecture, la performance et l'intégrité des données.
 
-- Assure la transition vers **SQLite** pour sécuriser le stockage concurrent.
-- Supervise la séparation asynchrone (yfinance vs httpx).
+- Assure la robustesse du stockage **SQLite** pour les accès concurrents.
+- Supervise la séparation asynchrone (yfinance vs httpx/FMP).
 - Valide l'exactitude du calcul ROE multi-années.
+- Gère le déploiement via **supervisord** (voir `supervisord.conf` et README).
 
-## 💻 Senior Developers (Team Tech)
+Rôle complet : `.agents/roles/lead-dev.md`
 
-**Mission :** Implémentation de haute qualité et optimisation.
+### Senior Developers
 
-- **Dév Senior 1 (Performance/Data)** : Focus sur l'intégration de l'API FMP pour le Sniper et l'optimisation du batch download yfinance.
-- **Dév Senior 2 (Algorithmes)** : Focus sur le scoring asymétrique (Momentum technique vs Qualité fondamentale).
-- **Dév Senior 3 (Système/Ops)** : Focus sur la résilience du scheduler et le déploiement PM2.
+- **Dév Senior 1 (Performance/Data)** : Intégration API FMP pour le Sniper, optimisation batch download yfinance.
+- **Dév Senior 2 (Algorithmes)** : Scoring asymétrique (Momentum technique vs Qualité fondamentale).
+- **Dév Senior 3 (Système/Ops)** : Résilience du scheduler APScheduler 4.x et déploiement supervisord.
 
-## 🐣 Beginner Developer
+### Beginner Developer
 
-**Mission :** Apprentissage et maintenance de premier niveau.
-
-- S'occupe de l'installation (venv, requirements).
-- Effectue les tests de bout en bout (`python3 main.py --now`).
-- Documente les procédures de redémarrage du service (PM2).
+- Installation (`venv`, `requirements.txt`).
+- Tests de bout en bout (`python3 main.py --now --force`).
+- Consultation des logs (`data/logs/`).
 
 ---
 
-## 🤝 Workflow de Validation
+## Workflow de Validation
 
 Tout changement majeur doit être validé par :
 
 1. Le **Trader** (pertinence financière).
 2. Le **Lead Dev** (intégrité technique / async).
 3. Le **PO** (conformité architecture funnel).
+
+---
+
+## Commandes Utiles
+
+```bash
+# Lancer les tests
+venv/bin/pytest tests/ -v
+
+# Scan immédiat (test, marché fermé OK)
+source venv/bin/activate && python3 main.py --now --force
+
+# Statut du process manager
+source venv/bin/activate && supervisorctl -c supervisord.conf status
+
+# Logs en temps réel
+tail -f data/logs/scanner_$(date +%Y-%m-%d).log
+```
