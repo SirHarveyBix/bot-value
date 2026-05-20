@@ -69,6 +69,44 @@ CREATE TABLE IF NOT EXISTS universe_metadata (
 );
 ```
 
+### Table `scanned_universe`
+
+> **Anti survivorship bias** : stocke TOUS les tickers ayant passé les filtres Chalutier (univers post-éligibilité, pré-shortlist) à chaque scan. Indispensable pour backtesting out-of-sample — sans cette table, impossible de savoir si le modèle sur-sélectionne ou si le marché entier sous-performe.
+
+```sql
+CREATE TABLE IF NOT EXISTS scanned_universe (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_date       TEXT NOT NULL,          -- ISO 'YYYY-MM-DD'
+    ticker          TEXT NOT NULL,
+    score_momentum  REAL,                   -- Score Chalutier (momentum seul, pré-Sniper)
+    rank_chalutier  INTEGER,                -- Rang dans l'univers Chalutier (~600-700 tickers)
+    in_shortlist    INTEGER DEFAULT 0,      -- 1 si dans le Top 30 envoyé au Sniper FMP
+    in_top10        INTEGER DEFAULT 0,      -- 1 si dans le Top 10 final (Actions ou ETF)
+    market_cap      REAL,
+    sector          TEXT,
+    price_at_scan   REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scanned_universe_date ON scanned_universe(scan_date);
+```
+
+**Requête backtesting type** (performance Top 10 vs univers entier à J+30) :
+
+```sql
+SELECT
+    su.ticker,
+    su.in_top10,
+    su.price_at_scan,
+    s.price_30d_later,
+    s.return_30d
+FROM scanned_universe su
+LEFT JOIN signals s ON su.ticker = s.ticker AND su.scan_date = s.scan_date
+WHERE su.scan_date = '2026-01-15'
+ORDER BY su.in_top10 DESC, su.rank_chalutier ASC;
+```
+
+---
+
 ### Migration schema (colonnes ajoutées en V1)
 
 ```python
@@ -94,13 +132,14 @@ for stmt in NEW_COLS:
 
 **Naming**: `fundamentals_{SYMBOL}.json`, `prices_{SYMBOL}.json`
 
-**TTL**: fondamentaux 24h (`CACHE_TTL_FUNDAMENTALS = 86400`), prix 4h (`CACHE_TTL_PRICE_HISTORY = 14400`)
+**TTL**: fondamentaux 27h (`CACHE_TTL_FUNDAMENTALS = 97200` — 24h provoque une race condition : cache créé à 09h32 expire 3 min avant le scan suivant à 09h35), prix 4h (`CACHE_TTL_PRICE_HISTORY = 14400`)
 
 **Invalidation post-earnings**: si `surprise_date = J-1`, invalider le cache fondamentaux avant le scan.
 
 ```json
 {
   "fetched_at": "2026-05-19T09:45:12.345678",
+  "expires_at": "2026-05-20T12:45:12.345678",
   "data": {
     "symbol": "AAPL",
     "source": "FMP",
@@ -109,6 +148,7 @@ for stmt in NEW_COLS:
     "marketCap": 3100000000000,
     "roe_ttm": 1.47,
     "roe_3y": 1.35,
+    "book_value_per_share": 4.2,
     "operatingMargins": 0.308,
     "totalDebt": 97000000000,
     "totalCash": null,
@@ -125,7 +165,11 @@ for stmt in NEW_COLS:
 }
 ```
 
-**Champ `totalCash`**: toujours `null` pour source FMP (Bug 2 fix). Utilisé uniquement dans le fallback yfinance (chemin retiré en V1).
+> **⚠️ `roe_ttm`** : présent dans la réponse FMP et stocké en cache, mais **interdit pour le scoring** (Règle d'Or §16). Seul `roe_3y` est utilisé dans le pilier Qualité. Si `roe_3y` est absent → ticker exclu (pas de fallback TTM).
+
+> **`book_value_per_share`** : champ obligatoire pour les gates ROE (`book_value_per_share ≤ 0` → exclusion ; `ROE > 150%` + `book_value_per_share < 5$` → cap percentile 80).
+
+**Champ `totalCash`** : toujours `null` pour source FMP. Chemin yfinance fallback retiré en V1 (Règle d'Or).
 
 ---
 

@@ -2,7 +2,7 @@
 
 ### Vision Stratégique du Trader
 
-Je ne cherche pas un gadget d'analyse technique ni un scanner intraday pour générer des alertes de scalping bruyantes. Mon besoin est la construction d'un **moteur de screening institutionnel automatisé**, conçu pour le Position Trading (horizon 2 à 8 mois).
+Je ne cherche pas un gadget d'analyse technique ni un scanner intraday pour générer des alertes de scalping bruyantes. Mon besoin est la construction d'un **moteur de screening institutionnel automatisé**, conçu pour le Position Trading (horizon 3 à 6 mois — sweet spot momentum académique Jegadeesh & Titman).
 
 L'objectif est d'extraire mécaniquement l'Alpha du marché en identifiant la convergence exacte entre la **Qualité fondamentale intrinèque** d'une entreprise et l'**Accélération de son prix (Momentum)**. Ce système doit tourner de manière autonome et asynchrone en environnement local, sans jamais sacrifier la fiabilité des données au profit de la quantité. Si le marché est en régime de panique, le système doit me l'indiquer et couper les signaux acheteurs. La préservation du capital prime sur le rendement.
 
@@ -25,7 +25,7 @@ En tant que trader quantitatif, ma matière première est la donnée. Or, les do
 | Critères                        | Phase 1 : Le Chalutier (`yfinance`)                                                                        | Phase 2 : Le Sniper (API FMP)                                                                               |
 | :------------------------------ | :--------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------- |
 | **Rôle**                        | Filtrage massif de liquidité et calcul du momentum prix.                                                   | Extraction chirurgicale des métriques bilancielles.                                                         |
-| **Cible & Volume**              | Univers large (~700 à 1000 tickers).                                                                       | Shortlist stricte (Top 50 maximum).                                                                         |
+| **Cible & Volume**              | Univers large (~700 à 1000 tickers).                                                                       | Shortlist stricte (**30 tickers maximum** — contrainte budget FMP : 30 × 7 endpoints = 210 calls sur quota 250/jour).  |
 | **Avantages**                   | Gratuit, excellent pour l'OHLCV (prix/volumes) et le calcul des rendements relatifs.                       | Qualité institutionnelle, données auditées, pas de valeurs aberrantes sur les ratios.                       |
 | **Inconvénients (Contraintes)** | **Instable**. Scraping agressif interdit. Données fondamentales (P/E, FCF) souvent manquantes ou erronées. | **Quotas stricts**. Appels limités (ex: 250/jour selon le tier). Interdiction de requêter l'univers entier. |
 | **Risques potentiels**          | Bannissement IP immédiat (Erreur 429) si absence de _rate limiting_ ou de requêtes asynchrones espacées.   | Épuisement du quota API en cas de boucle infinie ou de mauvaise gestion du cache local.                     |

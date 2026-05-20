@@ -81,6 +81,14 @@ async def run_scanner(force=False):
         # 2. Filtrage éligibilité pour les stocks
         eligible_stocks = build_eligible_universe(initial_stocks)
 
+        # MIN_UNIVERSE_SIZE check sur l'univers complet post-chalutier (spec §Table constantes)
+        min_universe_size = CONFIG["scanner"]["min_universe_size"]
+        if len(eligible_stocks) < min_universe_size:
+            logger.error(
+                f"universe_too_small : {len(eligible_stocks)} tickers éligibles < {min_universe_size}. Scan annulé."
+            )
+            return
+
         # 3. Le Chalutier : Fetch uniquement les prix pour tout l'univers éligible
         price_data = await fetch_prices_batch(eligible_stocks)
 

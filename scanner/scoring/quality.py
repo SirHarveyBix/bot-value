@@ -6,18 +6,16 @@ def calculate_quality_metrics(ticker_info):
     Extrait les métriques de qualité depuis le dictionnaire info.
     """
     try:
-        # Section 4.1: Priorité ROE 3 ans
+        # Section 4.1: ROE 3 ans obligatoire — TTM proscrit par la spec
         roe_3y = ticker_info.get("roe_3y")
-        roe_ttm = ticker_info.get("returnOnEquity") # returnOnEquity dans ticker_info contient souvent le ROE TTM ou déjà le 3y si FMP
-        
-        roe_used = roe_3y if roe_3y is not None else roe_ttm
-        
+        roe_used = roe_3y  # None si FMP n'a pas fourni le calcul 3 ans → exclu dans apply_quality_gates
+
         margin = ticker_info.get("operatingMargins")
         sector = ticker_info.get("sector")
 
-        # Dette Nette / EBITDA
-        # Section 4.4: Financials et Real Estate exclus de la dette/EBITDA
-        exclude_debt = sector in ["Financials", "Real Estate"]
+        # Section 4.4: Financials, Real Estate ET Utilities exclus de la dette/EBITDA
+        # (levier structurel réglementé — ratio sans sens comparatif pour ces secteurs)
+        exclude_debt = sector in ["Financials", "Real Estate", "Utilities"]
 
         total_debt = ticker_info.get("totalDebt")
         total_cash = ticker_info.get("totalCash")
@@ -55,24 +53,40 @@ def calculate_quality_metrics(ticker_info):
         logger.error(f"Erreur calcul métriques qualité: {e}")
         return {}
 
-def apply_quality_gates(metrics):
+def apply_quality_gates(metrics, ticker_info=None):
     """
-    Vérifie si le ticker passe les filtres d'exclusion Qualité.
+    Vérifie si le ticker passe les filtres d'exclusion Qualité (Section 4.1).
+    Retourne (passed: bool, reason: str | None, flags: list[str])
     """
     roe = metrics.get("roe")
     debt_ebitda = metrics.get("debt_ebitda")
     ebitda = metrics.get("ebitda")
+    flags = []
 
-    # Gate: EBITDA <= 0 exclu (Section 4.1)
+    # Gate: ROE 3 ans absent → FMP n'a pas fourni le calcul (TTM proscrit)
+    if roe is None:
+        return False, "ROE 3 ans indisponible (non calculable sans FMP)", flags
+
+    # Gate: EBITDA <= 0 exclu
     if ebitda is not None and ebitda <= 0:
-        return False, "EBITDA négatif ou nul"
+        return False, "EBITDA négatif ou nul", flags
 
-    # ROE négatif exclu
-    if roe is not None and roe < 0:
-        return False, "ROE négatif"
+    # Gate: book_value_per_share <= 0 → ROE mathématiquement sans sens
+    bvps = (ticker_info or {}).get("bookValuePerShare")
+    if bvps is not None and bvps <= 0:
+        return False, "book_value_per_share <= 0 (ROE non interprétable)", flags
 
-    # Dette trop élevée
+    # Gate: ROE négatif exclu
+    if roe < 0:
+        return False, "ROE négatif", flags
+
+    # Flag: ROE > 150% avec book_value < 5$ → probable gonflement par buybacks
+    if roe > 1.50 and bvps is not None and bvps < 5.0:
+        flags.append("⚠️ ROE possiblement gonflé par buybacks")
+        metrics["roe_capped"] = True  # engine.py plafonne le percentile à 80
+
+    # Gate: Dette trop élevée
     if debt_ebitda is not None and debt_ebitda > 6:
-        return False, f"Dette/EBITDA trop élevé: {debt_ebitda:.2f}"
+        return False, f"Dette/EBITDA trop élevé: {debt_ebitda:.2f}", flags
 
-    return True, None
+    return True, None, flags

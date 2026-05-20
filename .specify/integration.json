@@ -2,14 +2,14 @@
   "version": "0.8.12.dev0",
   "integration_state_schema": 1,
   "installed_integrations": [
-    "gemini"
+    "claude"
   ],
   "integration_settings": {
-    "gemini": {
+    "claude": {
       "script": "sh",
-      "invoke_separator": "."
+      "invoke_separator": "-"
     }
   },
-  "integration": "gemini",
-  "default_integration": "gemini"
+  "integration": "claude",
+  "default_integration": "claude"
 }

@@ -90,6 +90,129 @@ C'est une pondération qui se rapproche de ce que font les facteurs "Quality Mom
 
 ---
 
+## User Stories & Critères d'Acceptation
+
+> Cette section définit les scénarios testables et les exigences fonctionnelles (FR-xxx) de référence. Source de vérité pour la validation QA.
+
+---
+
+### User Story 1 — Scan quotidien avec signaux Telegram (Priorité : P1)
+
+Je suis un trader position trading. Chaque matin de bourse (09h35 ET), je reçois automatiquement sur Telegram un rapport contenant le Top 10 actions et Top 5 ETFs scorés sur 3 piliers (Qualité, Valorisation, Momentum), avec toutes les métriques clés et les flags de risque.
+
+**Test indépendant** : `python main.py --now --force` → réception Telegram avec Top 10 stocks + Top 5 ETFs formatés.
+
+**Scénarios d'acceptation** :
+
+1. **Given** marché NYSE ouvert, **When** scan déclenché à 09h35 ET, **Then** message Telegram reçu dans les 15 minutes avec `score_global`, `score_qualite`, `score_valorisation`, `score_momentum` tous non-nuls
+2. **Given** FMP API disponible, **When** 30 tickers shortlistés, **Then** budget FMP ≤ 250 calls (7 endpoints × 30 = 210 nominaux)
+3. **Given** jour férié NYSE, **When** scheduler déclenche, **Then** aucun scan exécuté, aucun message Telegram envoyé
+4. **Given** FMP indisponible (clé absente ou 5xx persistant après 2 retries), **When** scan déclenché, **Then** message Telegram `⚠️ Sniper FMP indisponible` envoyé, aucun signal émis
+5. **Given** message Telegram > 4096 chars, **When** envoi, **Then** message tronqué avec `[message tronqué]` — pas d'erreur API Telegram
+
+---
+
+### User Story 2 — Filtre de régime marché (Priorité : P1)
+
+Le système détecte le régime de marché avant chaque scan et adapte son comportement : silence total en panique réelle (VIX > 35), avertissement en stress modéré, scan normal sinon.
+
+**Test indépendant** : Mocks SPY/VIX aux 4 niveaux → vérifier comportement exact.
+
+**Scénarios d'acceptation** :
+
+1. **Given** VIX > 35 (quelle que soit la position SPY vs EMA200), **When** scan déclenché, **Then** scan annulé, `🚨 RÉGIME DE PANIQUE`, 1 entrée `regime='panic'` dans `scans`, 0 entrée dans `signals`
+2. **Given** SPY < EMA200 ET VIX entre 25 et 35, **When** scan exécuté, **Then** chaque signal Top 10 contient flag `⚠️ RÉGIME DE PRUDENCE`
+3. **Given** SPY < EMA200 ET VIX ≤ 25, **When** scan exécuté, **Then** scan normal, warning log interne uniquement
+4. **Given** SPY ≥ EMA200 ET VIX ≤ 25, **When** scan exécuté, **Then** scan complet, Top 10 émis sans flag de régime
+
+---
+
+### User Story 3 — Entonnoir qualité données (Priorité : P2)
+
+Filtre d'éligibilité strict sur ~700 tickers, scoring sur les 30 meilleurs en momentum. Seules des données fraîches et fiables entrent dans le scoring.
+
+**Test indépendant** : Injecter tickers avec données manquantes, vieilles, secteur=None → vérifier exclusions + logs.
+
+**Scénarios d'acceptation** :
+
+1. **Given** `marketCap < 2B$` ou `volume_dollar_20j < 5M$` ou `price < 5$`, **When** filtre éligibilité, **Then** ticker exclu, loggé `eligibility_filter`
+2. **Given** `sector = None` (yfinance), **When** pipeline Actions, **Then** exclu avec motif `sector_missing`
+3. **Given** données FMP > 120 jours, **When** ticker dans Top 10, **Then** flag `⚠️ données potentiellement périmées`
+4. **Given** données FMP > 180 jours, **When** ranking final, **Then** ticker exclu du Top 10
+5. **Given** univers post-chalutier < 100 tickers, **When** scoring déclenché, **Then** scan annulé, warning log `universe_too_small`
+6. **Given** secteur < 3 tickers dans la shortlist scorée, **When** ranking intra-secteur, **Then** bascule automatique vers ranking cross-universe
+
+---
+
+### User Story 4 — Persistance et suivi de performance (Priorité : P2)
+
+Chaque scan enregistré en SQLite. Les signaux Top 10 stockés avec prix au signal. Job de fond met à jour retour 30j/90j.
+
+**Test indépendant** : 2 scans successifs → vérifier tables `scans` et `signals` avec champs obligatoires.
+
+**Scénarios d'acceptation** :
+
+1. **Given** scan complété, **When** Top 10 émis, **Then** 1 entrée `scans` + ≤ 10 entrées `signals` avec `price_at_signal` non-null
+2. **Given** ticker réapparaît dans Top 10 après absence, **When** stockage, **Then** `first_seen_date` conservée (non réinitialisée)
+3. **Given** signal ≥ 30 jours, **When** `update_signal_returns()` exécuté, **Then** `price_30d_later` et `return_30d` mis à jour (yfinance seul, aucun appel FMP)
+4. **Given** scan en régime Panique, **When** exécuté, **Then** 1 entrée `scans` avec `regime='panic'`, 0 entrée `signals`
+
+---
+
+### User Story 5 — ETFs sectoriels en pipeline séparé (Priorité : P3)
+
+ETFs scorés sur momentum pur (sector rotation), pipeline et section Telegram séparés, leveraged/inverses exclus.
+
+**Test indépendant** : TQQQ (leveraged) → exclu. XLK → scoré. Section Telegram distincte vérifiée.
+
+**Scénarios d'acceptation** :
+
+1. **Given** ETF avec "ULTRA", "3X", "BEAR" dans le nom, **When** pipeline ETF, **Then** exclu
+2. **Given** Top 5 ETFs scorés, **When** message Telegram, **Then** section `📦 TOP ETFs DU JOUR` séparée des Actions
+3. **Given** ETF scoré, **When** scoring, **Then** `score = 50% Perf 6M + 50% Surperf vs SPY`, aucune métrique fondamentale
+
+---
+
+### Cas limites (Edge Cases)
+
+- `book_value_per_share ≤ 0` : ticker exclu du pilier Qualité (ROE mathématiquement sans sens)
+- `ROE > 150%` avec `book_value_per_share < 5$` : flag `⚠️ ROE possiblement gonflé par buybacks`, score ROE plafonné au percentile 80
+- `EBITDA ≤ 0` ou `Dette/EBITDA > 6x` : exclusion inconditionnelle
+- `P/E Forward absent (~40-60% des tickers)` : fallback P/E TTM avec pénalité -5 pts sur pilier Valorisation
+- `P/E Forward ET P/E TTM absents` : pilier Valorisation exclu, repondération `Qualité × 0.50 + Momentum × 0.50`
+- Secteurs Financials / Real Estate / Utilities : exclusion Dette/EBITDA du pilier Qualité
+- Biotech (Health Care, marketCap < 5B$) : gate P/E négatif suspendu
+- Earnings dans les 14 prochains jours : tag `📅 Earnings à venir` (informatif, non bloquant)
+- yfinance batch download partiel (< 60% tickers valides) : scan interrompu, alerte Telegram erreur
+
+---
+
+### Exigences Fonctionnelles
+
+- **FR-001** : Le scan DOIT s'exécuter uniquement les jours de bourse NYSE (via `pandas_market_calendars`)
+- **FR-002** : Le Market Gate DOIT évaluer VIX et SPY/EMA200 en priorité absolue avant tout scoring
+- **FR-003** : `yfinance` NE DOIT PAS être utilisé pour ROE, marges, FCF, ou toute donnée bilancielle
+- **FR-004** : FMP DOIT être utilisé pour les 7 endpoints de la shortlist (30 tickers max, 210 calls nominaux)
+- **FR-005** : Si FMP indisponible → Telegram `⚠️ Sniper FMP indisponible` + scan arrêté — aucun fallback yfinance fondamentaux
+- **FR-006** : Scoring Actions = 3 piliers (Qualité 35%, Valorisation 30%, Momentum 35%) avec percentile ranking
+- **FR-007** : Scoring Momentum = 5 critères incluant révision estimations analystes (FMP `analyst-estimates`)
+- **FR-008** : Earnings Surprise DOIT avoir décroissance temporelle linéaire sur 90 jours post-résultats
+- **FR-009** : Ranking intra-secteur DOIT basculer en cross-universe si secteur a < 3 tickers dans la shortlist
+- **FR-010** : Tous les messages Telegram DOIVENT être html.escape()'és et tronqués à 4096 chars max
+- **FR-011** : SQLite WAL mode OBLIGATOIRE pour l'accès concurrent bot/dashboard
+- **FR-012** : Toutes les constantes métier DOIVENT être dans `config.yaml` (pas de magic numbers dans le code)
+
+### Critères de Succès Mesurables
+
+- **SC-001** : Budget FMP ≤ 250 calls/jour en conditions nominales
+- **SC-002** : Durée totale du scan ≤ 15 minutes de 09h35 ET à réception Telegram
+- **SC-003** : `score_global` ∈ [0, 100] pour chaque ticker du Top 10, jamais NaN
+- **SC-004** : Aucun scan ne crash silencieusement — toute erreur critique produit un message Telegram
+- **SC-005** : 100% des tests passent en isolation réseau (VCR cassettes, aucun appel API live)
+- **SC-006** : Après 90 jours, `SELECT avg(return_30d) FROM signals` retourne un résultat calculable
+
+---
+
 ## Spécifications Techniques Complètes
 
 ---
@@ -99,8 +222,8 @@ C'est une pondération qui se rapproche de ce que font les facteurs "Quality Mom
 ```
 Nom du projet    : ValueMomentum Scanner
 Version          : 1.0
-Horizon cible    : Position Trading (Hold) — 3 à 12 mois
-Type de stratégie : Swing Trading Long Terme / Investissement Quantitatif
+Horizon cible    : Position Trading (Hold) — 3 à 6 mois (sweet spot momentum académique)
+Type de stratégie : Investissement Quantitatif Factoriel (Quality × Momentum)
 Fréquence        : Quotidienne (jours de bourse US uniquement)
 Déclenchement    : 09h30 ET (après ouverture NYSE)
 Sortie principale : Alertes Telegram + Base de données SQLite (`scanner_history.db`)
@@ -161,7 +284,23 @@ Pour maximiser l'univers tout en garantissant la qualité institutionnelle des s
 > | `analyst-estimates/{symbol}`               | 30                  | Révision estimations analystes 3M                  |
 > | **Total**                                  | **210 calls/run**   | Marge : 40 calls pour retries ciblés               |
 >
-> **SHORTLIST_SIZE = 30 est non négociable** : 30 × 7 endpoints = 210 calls nominaux. Avec cache 24h actif sur les tickers non-earnings, les retries ne concernent qu'une minorité. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag, pas de 3ème tentative. Budget réel estimé : 210 calls nominaux + ~15 retries = 225 calls/run. Ne pas dépasser 30 tickers sans audit budget préalable.
+> **SHORTLIST_SIZE = 30 est non négociable** : 30 × 7 endpoints = 210 calls nominaux. Avec cache 27h actif sur les tickers non-earnings, les retries ne concernent qu'une minorité. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag, pas de 3ème tentative. Budget réel estimé : 210 calls nominaux + ~15 retries = 225 calls/run. Ne pas dépasser 30 tickers sans audit budget préalable.
+>
+> **Disjoncteur global FMP (hard limit 245 calls)** : Le système DOIT maintenir un compteur global d'appels FMP par run (`fmp_call_counter`). Dès que ce compteur atteint **245 calls**, les fetches FMP des tickers restants sont interrompus immédiatement. Le scoring et le ranking sont finalisés avec les données disponibles à ce moment. Un flag `⚠️ Budget FMP proche du quota — shortlist partielle` est ajouté au message Telegram. Cette limite de 245 (non 250) conserve 5 calls de marge pour les éventuels retries de notification Telegram et les opérations de fin de run.
+>
+> ```python
+> FMP_CALL_BUDGET_HARD_LIMIT = 245  # Disjoncteur — 5 calls de marge sur quota 250
+>
+> fmp_call_counter = 0
+>
+> async def fmp_fetch(endpoint: str, symbol: str) -> dict:
+>     global fmp_call_counter
+>     if fmp_call_counter >= FMP_CALL_BUDGET_HARD_LIMIT:
+>         logger.warning(f"Budget FMP atteint ({fmp_call_counter} calls) — skip {symbol}/{endpoint}")
+>         return {}
+>     fmp_call_counter += 1
+>     # ... appel HTTP normal ...
+> ```
 >
 > **Si FMP est indisponible (clé absente ou erreur 5xx persistante)** : envoyer une alerte Telegram `🚨 Sniper FMP indisponible — aucun signal émis aujourd'hui` et arrêter le scan. **Aucun fallback vers yfinance pour les fondamentaux** — cf. Règle d'Or du besoin.
 
@@ -205,21 +344,44 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 Pour garantir que l'Event Loop d'asyncio ne gèle jamais (notamment pour les notifications Telegram et le scheduler), le fetcher utilise une approche hybride :
 
-**Fetch prix OHLCV (yfinance via Threads) :**
-`yfinance` étant purement synchrone, ses appels sont enveloppés dans des threads pour ne pas bloquer la boucle principale.
+**Fetch prix OHLCV (yfinance via Threads — téléchargement par chunks obligatoire) :**
+`yfinance` étant purement synchrone, ses appels sont enveloppés dans des threads pour ne pas bloquer la boucle principale. Le batch download sur ~700 tickers en un seul appel déclenche systématiquement des erreurs HTTP 429 (ban IP temporaire). Le téléchargement DOIT être découpé en chunks de **100 tickers maximum** avec une pause de **2 secondes** entre chaque chunk.
 
 ```python
-# Utilisation de asyncio.to_thread pour libérer l'event loop
-prices = await asyncio.to_thread(
-    yf.download,
-    tickers=" ".join(all_tickers),
-    period="1y",
-    group_by="ticker",
-    auto_adjust=True,
-    threads=True,
-    progress=False
-)
+import asyncio
+import yfinance as yf
+
+YFINANCE_CHUNK_SIZE = 100        # Tickers par batch — au-delà, risque 429 élevé
+YFINANCE_CHUNK_DELAY_S = 2.0     # Pause entre chunks (secondes)
+
+async def fetch_prices_chunked(tickers: list[str], period: str = "1y") -> dict:
+    """Télécharge les prix OHLCV par chunks pour éviter le ban IP yfinance."""
+    all_prices = {}
+    chunks = [tickers[i:i + YFINANCE_CHUNK_SIZE] for i in range(0, len(tickers), YFINANCE_CHUNK_SIZE)]
+
+    for i, chunk in enumerate(chunks):
+        chunk_data = await asyncio.to_thread(
+            yf.download,
+            tickers=" ".join(chunk),
+            period=period,
+            group_by="ticker",
+            auto_adjust=True,
+            threads=False,     # Pas de multi-thread interne yfinance (amplifie les 429)
+            progress=False
+        )
+        all_prices.update(chunk_data)
+
+        if i < len(chunks) - 1:
+            await asyncio.sleep(YFINANCE_CHUNK_DELAY_S)  # Pause entre chunks
+
+    return all_prices
 ```
+
+> **Pourquoi `threads=False` en interne** : `yf.download(threads=True)` ouvre plusieurs connexions simultanées vers Yahoo Finance depuis le même IP. Combiné à ~700 tickers, cela simule une attaque DDoS du point de vue des serveurs Yahoo, déclenchant un ban immédiat. Avec `threads=False` + chunks de 100 + pause 2s, le profil de requêtes ressemble à un navigateur humain naviguant rapidement — acceptable pour Yahoo Finance.
+
+> **Session User-Agent rotatif** : Pour réduire davantage le risque de détection, les sessions yfinance peuvent être instanciées avec des User-Agents différents par chunk (via `yf.Ticker._session`). En v1.0, la rotation est optionnelle — la stratégie de chunking seule est suffisante pour l'univers ~700 tickers.
+
+> **Fallback batch partiel** : Si un chunk retourne < 60% de tickers valides (`len(valid) / len(chunk) < 0.6`), logguer `⚠️ batch_partial_failure` et continuer — ne pas annuler le scan entier pour un chunk défaillant. Si **tous** les chunks échouent sous 60% : déclencher l'arrêt du scan + alerte Telegram erreur yfinance (cf. §13.4).
 
 **Fetch fondamentaux (httpx pour FMP) :**
 L'API FMP est interrogée via `httpx.AsyncClient` pour une asynchronicité native.
@@ -236,8 +398,8 @@ Le système applique un **Rate Limiting Séquentiel** strict pour éviter le ban
 
 1. **Délai asynchrone jittered** : Entre chaque appel `.info` (yfinance) ou API (FMP), un délai aléatoire compris entre **0.8s et 1.5s** (`await asyncio.sleep(random.uniform(0.8, 1.5))`) est observé pour simuler un comportement humain et éviter le bannissement IP.
 2. **INTER_REQUEST_DELAY** : Fixé à 1.0s par défaut pour garantir la pérennité de l'accès Yahoo Finance.
-3. **MAX_RETRIES** : 3 tentatives avec backoff exponentiel asynchrone.
-4. **Fallback** : Si FMP échoue sur un ticker de la shortlist, le système tente un fallback asynchrone vers `yf.Ticker(ticker).info` (via `to_thread`).
+3. **FMP_MAX_RETRIES** : **2 tentatives maximum** avec backoff exponentiel asynchrone (cf. §2 budget FMP — 3 retries dépasserait le budget 250 calls).
+4. **Aucun fallback FMP → yfinance** : Si FMP échoue après 2 retries pour un ticker, le ticker est ignoré (skip + flag dans les logs). La Règle d'Or est absolue — voir §16 contrainte 1.
 
 ### 2.3 Validation des données reçues
 
@@ -252,9 +414,11 @@ def is_valid_ticker_data(data: dict) -> bool:
 ### 2.4 Cache
 
 ```python
-CACHE_TTL_FUNDAMENTALS = 24 * 3600   # 24h — fondamentaux changent peu entre résultats
+CACHE_TTL_FUNDAMENTALS = 27 * 3600   # 27h — voir note race condition ci-dessous
 CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
 ```
+
+> **⚠️ Race condition TTL à 24h** : Le scan se déclenche à 09h35 ET. Un cache créé à 09h32 la veille expire exactement à 09h32 le lendemain — 3 minutes *avant* le prochain scan. Toute la shortlist de 30 tickers déclenche simultanément 210 appels FMP à 09h35 ET, annulant le bénéfice du cache et consommant l'intégralité du quota en un seul run. TTL à **27h** garantit que le cache reste valide pour le scan suivant, quel que soit le délai d'exécution réel (congestion réseau, retry, heure d'été/hiver). La valeur `97200s` (27×3600) est la valeur de référence dans `config.yaml`.
 
 **Invalidation post-earnings** : si un ticker est dans l'earnings calendar avec date = J-1 (résultats publiés la veille), son cache fondamentaux est invalidé forcément avant le scan.
 
@@ -264,7 +428,7 @@ CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
 {
   "ticker": "MSFT",
   "fetched_at": "2025-01-15T09:32:00Z",
-  "expires_at": "2025-01-16T09:32:00Z",
+  "expires_at": "2025-01-16T12:32:00Z",
   "data": { "...": "..." }
 }
 ```
@@ -302,7 +466,7 @@ Mise à jour mensuelle manuelle (±5 min de travail) : ajouter/supprimer les ent
 
 ### 4.0 Filtre de Régime (Market Gate) — PRIORITÉ SURVIE
 
-Pour éviter l'effet de "Whipsaw" (oscillations autour d'une moyenne simple), le système utilise un double filtre de stress à **trois niveaux** :
+Pour éviter l'effet de "Whipsaw" (oscillations autour d'une moyenne simple), le système utilise un double filtre de stress à **quatre niveaux** :
 
 - **Indicateurs** : Moyenne Mobile Exponentielle 200 jours (EMA 200) du SPY + Indice de Volatilité (VIX).
 
@@ -325,12 +489,12 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 
 #### PILIER 1 : QUALITÉ (pondération 35%)
 
-| Métrique             | Source           | Calcul                                    | Ranking            |
-| -------------------- | ---------------- | ----------------------------------------- | ------------------ |
-| ROE (Moyenne 3 ans)  | API FMP (Sniper) | Moyenne du ROE sur les 3 derniers bilans  | Cross-universe     |
-| Marge opérationnelle | yfinance / FMP   | Valeur directe                            | Intra-secteur GICS |
-| Dette nette / EBITDA | yfinance / FMP   | Calcul : (totalDebt - totalCash) / ebitda | Cross-universe     |
-| FCF Yield proxy      | yfinance / FMP   | freeCashflow / marketCap                  | Cross-universe     |
+| Métrique             | Source               | Calcul                                                             | Ranking            |
+| -------------------- | -------------------- | ------------------------------------------------------------------ | ------------------ |
+| ROE (Moyenne 3 ans)  | **API FMP (Sniper)** | Moyenne du ROE sur les 3 derniers bilans (income + balance)        | Cross-universe     |
+| Marge opérationnelle | **API FMP (Sniper)** | `operatingProfitMarginTTM` via `ratios-ttm`                        | Intra-secteur GICS |
+| Dette nette / EBITDA | **API FMP (Sniper)** | `netDebt` / `ebitda` — exclus : Financials, Real Estate, Utilities | Cross-universe     |
+| FCF Yield proxy      | **API FMP (Sniper)** | `freeCashFlowTTM` (key-metrics-ttm) / marketCap                    | Cross-universe     |
 
 > **Note ROE** : L'utilisation du ROE TTM est proscrite car potentiellement faussée par des effets de levier ou des cessions exceptionnelles. Le calcul moyen sur 3 ans est **obligatoire** et récupéré via les endpoints `income-statement` et `balance-sheet-statement` de l'API FMP.
 
@@ -346,6 +510,28 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 
 > **Pourquoi le filtre book_value et ROE > 150%** : Le ROE = Net Income / Book Equity. Des programmes massifs de rachats d'actions réduisent le Book Equity jusqu'à le rendre négatif ou quasi-nul, produisant des ROE de 100-500% qui ne reflètent pas l'excellence opérationnelle mais le levier comptable. Apple (ROE ~160%), MSFT (~35% stable), sans ce filtre, dominent le percentile Qualité pour la mauvaise raison. Un `book_value_per_share ≤ 0` rend le ROE mathématiquement sans sens et doit exclure le titre du pilier Qualité.
 
+**Winsorisation des ratios avant percentile ranking (obligatoire) :**
+
+Avant tout calcul de percentile, les ratios bruts DOIVENT être clampés dans des plages réalistes. Des erreurs d'API (ex: FMP retourne `0.001` ou `999` pour un ratio en erreur de parsing) ou des cas extrêmes légitimes mais statistiquement aberrants (ex: ROE = 500% post-restructuration) corrompent le ranking entier si non traités.
+
+```python
+RATIO_CLAMP = {
+    "roe":               (0.0, 1.50),    # 0% à 150% — au-delà → gate buyback flag
+    "operating_margin":  (-0.50, 0.60),  # -50% à +60% — marges au-delà sont anomalies
+    "fcf_yield":         (-0.20, 0.30),  # -20% à +30%
+    "debt_ebitda":       (0.0, 10.0),    # 0x à 10x — au-delà → gate exclusion à 6x déjà
+    "pe_ratio":          (1.0, 60.0),    # P/E ≤ 1 ou > 60 → anomalie de parsing FMP
+    "ev_ebitda":         (0.0, 40.0),    # 0x à 40x — gate exclusion à 40 déjà
+    "peg_ratio":         (-5.0, 5.0),    # PEG hors [-5, 5] = signal non interprétable
+}
+
+def winsorize(value: float, low: float, high: float) -> float:
+    """Clamp à la plage [low, high]. Valeurs hors plage = anomalies de données, pas de signaux."""
+    return max(low, min(high, value))
+```
+
+> **Pourquoi winsoriser et non exclure** : Les gates d'exclusion (ROE < 0, EV/EBITDA > 40) éliminent les cas inacceptables. La winsorisation traite les valeurs aberrantes qui passent les gates mais perturberaient le ranking — un EV/EBITDA de 39.8 est valide mais si l'autre extrême est 0.01 (erreur de parsing), le percentile de 39.8 plafonne artificiellement tous les tickers intermédiaires. Le clamping nivelle les extremes sans exclure les tickers.
+
 **Score Qualité** = moyenne pondérée des 4 percentile rangs
 
 - ROE (Moyenne 3 ans) : 40%
@@ -357,11 +543,11 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 
 #### PILIER 2 : VALORISATION (pondération 30%)
 
-| Métrique    | Donnée yfinance      | Calcul                    | Ranking            |
-| ----------- | -------------------- | ------------------------- | ------------------ |
-| P/E Forward | `forwardPE`          | Valeur directe (inversée) | Intra-secteur GICS |
-| EV/EBITDA   | `enterpriseToEbitda` | Valeur directe (inversée) | Intra-secteur GICS |
-| PEG Ratio   | `pegRatio`           | Valeur directe (inversée) | Cross-universe     |
+| Métrique    | Source               | Champ FMP                    | Calcul                    | Ranking            |
+| ----------- | -------------------- | ---------------------------- | ------------------------- | ------------------ |
+| P/E Forward | **API FMP (Sniper)** | `peRatioTTM` (ratios-ttm)    | Valeur directe (inversée) | Intra-secteur GICS |
+| EV/EBITDA   | **API FMP (Sniper)** | `enterpriseValueMultipleTTM` | Valeur directe (inversée) | Intra-secteur GICS |
+| PEG Ratio   | **API FMP (Sniper)** | `pegRatioTTM`                | Valeur directe (inversée) | Cross-universe     |
 
 **Règles gates valorisation (filtres d'exclusion, non scorés) :**
 
@@ -481,7 +667,7 @@ score_global = (
 
 ---
 
-### 4.3 Pipeline ETFs (score simplifié)
+### 4.3 Pipeline ETFs (score momentum pur — sector rotation)
 
 Pour les ETFs, le scoring est purement asymétrique et se concentre sur l'action des prix, excluant le volume (potentiellement toxique en cas de panique) :
 
@@ -748,6 +934,28 @@ Le stockage repose sur une base de données **SQLite** (`data/signals/scanner_hi
 - **Table `scans`** : Enregistre chaque run (date, métriques marché comme SPY MA200).
 - **Table `signals`** : Stocke les signaux Top 10 et Top 5 ETFs avec tous leurs scores et métriques.
 - **Table `universe_metadata`** : Historique de la taille de l'univers et des exclusions.
+- **Table `scanned_universe`** : Snapshot complet de l'univers éligible à chaque scan (voir ci-dessous).
+
+> **⚠️ Biais de survivorship — obligation de stocker l'univers complet** : Stocker uniquement le Top 10 dans `signals` introduit un biais de survivorship massif dans tout futur backtesting. Si on retrouve après 6 mois que les tickers dans `signals` ont sous-performé, on ne peut pas savoir si l'ensemble de l'univers éligible a également sous-performé (régime de marché défavorable) ou si le modèle de scoring a sélectionné les mauvais tickers. Sans l'univers complet, le track record est auditer mais pas backtester. La table `scanned_universe` stocke **tous les tickers ayant passé les filtres Chalutier** (univers post-éligibilité, pré-shortlisting) à chaque scan.
+
+```sql
+CREATE TABLE IF NOT EXISTS scanned_universe (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_date       TEXT NOT NULL,          -- Date du scan (YYYY-MM-DD)
+    ticker          TEXT NOT NULL,
+    score_momentum  REAL,                   -- Score Chalutier (momentum seul, pré-Sniper)
+    rank_chalutier  INTEGER,                -- Rang dans l'univers Chalutier
+    in_shortlist    INTEGER DEFAULT 0,      -- 1 si dans le Top 30 envoyé au Sniper
+    in_top10        INTEGER DEFAULT 0,      -- 1 si dans le Top 10 final
+    market_cap      REAL,
+    sector          TEXT,
+    price_at_scan   REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scanned_universe_date ON scanned_universe(scan_date);
+```
+
+> **Usage backtesting** : Requête type pour comparer la performance du Top 10 vs l'univers entier sur 30 jours : `SELECT su.ticker, su.in_top10, s.return_30d FROM scanned_universe su LEFT JOIN signals s ON su.ticker = s.ticker AND su.scan_date = s.scan_date WHERE su.scan_date = '2025-01-15'`. Renseigner `price_at_scan` + `in_top10` permet de recalculer les rendements pour tous les tickers de l'univers — pas seulement ceux du Top 10.
 
 **Champs obligatoires dans `signals` pour le suivi de performance :**
 
@@ -895,54 +1103,83 @@ pytest-asyncio>=0.23.0
 
 ### 11.1 Prérequis système
 
+Le projet est un stack **100% Python** — aucune dépendance Node.js ou npm n'est nécessaire. `supervisor` est installé via `requirements.txt` comme n'importe quelle autre dépendance Python.
+
 ```bash
 # Python 3.11+ via Homebrew
 brew install python@3.11
 
-# PM2 pour la gestion du processus
-npm install -g pm2
-
-# Création de l'environnement virtuel
-cd ~/valuemomentum-scanner
+# Cloner le projet et créer l'environnement virtuel
+git clone https://github.com/SirHarveyBix/bot-value.git
+cd bot-value
 python3.11 -m venv venv
 source venv/bin/activate
+
+# Installe toutes les dépendances, y compris supervisor
 pip install -r requirements.txt
 ```
 
-### 11.2 Configuration PM2
+### 11.2 Configuration supervisord
 
-```javascript
-// ecosystem.config.js
-module.exports = {
-  apps: [
-    {
-      name: "valuemomentum-scanner",
-      script: "venv/bin/python",
-      args: "main.py",
-      cwd: "/Users/[USER]/valuemomentum-scanner",
-      interpreter: "none",
-      watch: false,
-      autorestart: true,
-      restart_delay: 30000, // 30s entre les restarts
-      max_restarts: 5,
-      log_file: "data/logs/pm2.log",
-      error_file: "data/logs/pm2-error.log",
-      env: {
-        TZ: "America/New_York",
-        PYTHONPATH: "/Users/[USER]/valuemomentum-scanner",
-      },
-    },
-    {
-      name: "valuemomentum-web",
-      script: "venv/bin/python",
-      args: "-m http.server 8080 --directory web",
-      cwd: "/Users/[USER]/valuemomentum-scanner",
-      interpreter: "none",
-      watch: false,
-      autorestart: true,
-    },
-  ],
-};
+Le process manager est **supervisord** (paquet Python `supervisor`). La configuration se trouve à la racine du projet dans `supervisord.conf`.
+
+```ini
+[supervisord]
+logfile=data/logs/supervisord.log
+pidfile=/tmp/valuemomentum-supervisord.pid
+loglevel=info
+
+[unix_http_server]
+file=/tmp/valuemomentum-supervisor.sock
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///tmp/valuemomentum-supervisor.sock
+
+[program:scanner]
+command=%(here)s/venv/bin/python main.py
+directory=%(here)s
+environment=TZ="America/New_York",PYTHONPATH="%(here)s"
+autostart=true
+autorestart=true
+startretries=5
+stdout_logfile=data/logs/scanner_stdout.log
+stderr_logfile=data/logs/scanner_stderr.log
+
+[program:web]
+command=%(here)s/venv/bin/python -m http.server 8080 --directory web
+directory=%(here)s
+autostart=true
+autorestart=true
+stdout_logfile=data/logs/web_stdout.log
+stderr_logfile=data/logs/web_stderr.log
+```
+
+Points clés :
+
+- `%(here)s` résout automatiquement au dossier contenant `supervisord.conf` — aucun chemin absolu à renseigner.
+- `TZ="America/New_York"` est injecté directement dans l'environnement du processus `scanner`.
+- `startretries=5` relance le scanner jusqu'à 5 fois en cas de crash.
+- Les deux programmes (`scanner` et `web`) sont gérés indépendamment : un crash du dashboard n'affecte pas le scanner.
+
+**Commandes courantes :**
+
+```bash
+source venv/bin/activate
+
+# Démarrer supervisord (et tous les programmes)
+supervisord -c supervisord.conf
+
+# Vérifier l'état des processus
+supervisorctl -c supervisord.conf status
+
+# Arrêter supervisord proprement
+supervisorctl -c supervisord.conf shutdown
+
+# Redémarrer uniquement le scanner
+supervisorctl -c supervisord.conf restart scanner
 ```
 
 ### 11.3 Prévention veille Mac Mini
@@ -963,15 +1200,51 @@ pmset -g
 
 ### 11.4 Démarrage et persistence au reboot
 
-```bash
-# Enregistrement PM2 dans launchd (redémarrage automatique au boot)
-pm2 startup launchd
-# Exécuter la commande générée par la commande ci-dessus
-pm2 save
+Le démarrage automatique au reboot est géré par **launchd** (gestionnaire de services natif macOS). Exécuter ce bloc **depuis le dossier racine du projet** :
 
-# Démarrage manuel initial
-pm2 start ecosystem.config.js
-pm2 status
+```bash
+PROJECT_DIR="$(pwd)"
+PLIST=~/Library/LaunchAgents/com.valuemomentum.plist
+
+cat > "$PLIST" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.valuemomentum</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PROJECT_DIR}/venv/bin/supervisord</string>
+        <string>-c</string>
+        <string>${PROJECT_DIR}/supervisord.conf</string>
+        <string>-n</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>${PROJECT_DIR}</string>
+    <key>StandardOutPath</key>
+    <string>${PROJECT_DIR}/data/logs/launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${PROJECT_DIR}/data/logs/launchd_stderr.log</string>
+</dict>
+</plist>
+EOF
+
+launchctl load "$PLIST"
+echo "Service installé. Le scanner démarrera à chaque boot."
+```
+
+> **Note** : Le flag `-n` (nodaemon) est requis par le mécanisme `KeepAlive` de launchd — supervisord doit rester en foreground pour que launchd puisse le surveiller et le relancer.
+
+Pour désinstaller :
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.valuemomentum.plist
+rm ~/Library/LaunchAgents/com.valuemomentum.plist
 ```
 
 ---
@@ -1033,11 +1306,12 @@ def fetch_with_retry(ticker: str) -> dict:
 
 ### 13.2 Cache des données fondamentales
 
-Les données fondamentales (P/E, ROE, marges) ne changent pas d'un jour à l'autre entre les publications de résultats. Les fetcher en cache avec un TTL de 24h pour éviter d'interroger yfinance 600 fois par run.
+Les données fondamentales (P/E, ROE, marges) ne changent pas d'un jour à l'autre entre les publications de résultats. Le fetcher les met en cache pour éviter d'épuiser les 250 calls FMP/jour sur des données déjà récupérées.
 
 ```python
-# Règle de cache
-CACHE_TTL_FUNDAMENTALS = 24 * 3600   # 24 heures
+# Règle de cache — TTL 27h pour éviter la race condition à 24h
+# (scan à 09h35 ET, cache J-1 créé à ~09h32 → expirerait 3min avant le prochain scan)
+CACHE_TTL_FUNDAMENTALS = 27 * 3600   # 97 200 secondes
 CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4 heures (prix intraday)
 ```
 
@@ -1120,7 +1394,10 @@ Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de 
 | `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                     | §3.2         |
 | `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                        | §3bis.2.1    |
 | `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le budget 250 calls            | §2           |
-| `CACHE_TTL_FUNDAMENTALS`        | 86400s (24h)      | [43200, 172800]                                                   | §3bis.2.4    |
+| `FMP_CALL_BUDGET_HARD_LIMIT`    | 245               | [230, 249] — disjoncteur global, 5 calls de marge sur quota 250   | §2           |
+| `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429          | §3bis.2.1    |
+| `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                          | §3bis.2.1    |
+| `CACHE_TTL_FUNDAMENTALS`        | 97200s (27h)      | [86400, 172800] — **min 27h** pour éviter race condition 09h35    | §3bis.2.4    |
 | `CACHE_TTL_PRICE_HISTORY`       | 14400s (4h)       | [3600, 86400]                                                     | §3bis.2.4    |
 | `EARNINGS_WINDOW_DAYS`          | 14                | [7, 21]                                                           | §5.2         |
 | `MIN_UNIVERSE_SIZE`             | 100               | [50, 200] — en dessous : percentile ranking invalide, scan annulé | §4           |

@@ -1,23 +1,20 @@
 <!--
-SYNC IMPACT REPORT — 2026-05-19
-Version change: 1.0.0 → 1.1.0 (MINOR: material guidance additions, principle expansions)
+SYNC IMPACT REPORT — 2026-05-21
+Version change: 1.1.0 → 1.1.1 (PATCH: non-semantic clarifications, missing quality gates documented, consistency fixes)
 
 Modified principles:
-- I. Funnel Architecture → clarified FMP/yfinance strict separation, FMP unavailability behavior, SHORTLIST_SIZE constraint (30, non-negotiable)
-- III. Market Gate → expanded from 2-level to 4-level priority cascade; VIX > 35 now triggers Panique regardless of SPY position (critical fix)
-- V. Quantitative Momentum → 4 sub-criteria expanded to 5 (analyst estimate revisions added as V1.0 requirement)
+- II. Quality & Stability → added book_value_per_share gates (≤ 0 → exclude; ROE > 150% + BVS < $5 → cap percentile 80 + flag), added Utilities to debt/EBITDA exclusion sector list
+- VI. Sector GICS Integrity → clarified that MIN_UNIVERSE_SIZE = 100 applies to the full post-eligibility Chalutier universe (before shortlisting to 30), not to the shortlist itself
 
 Added sections:
-- VI. Sector GICS Integrity (new principle)
-- VII. Signal Persistence (new principle)
-- Constants table in Technical Standards
+- ETF Pipeline note in Principle I: sector rotation momentum framing (not value), leveraged ETF exclusion requirement
 
 Templates requiring update:
 - ✅ .specify/memory/constitution.md (this file)
-- ⚠ .specify/templates/plan-template.md — Constitution Check items I, III, V reference old principle content (advisory, not blocking)
+- ✅ .specify/templates/plan-template.md — Constitution Check items VI/VII corrected (Sector GICS Integrity / Signal Persistence); Technical Standards and Quality Gates added as separate checklist items
 
 Follow-up TODOs:
-- Code fixes required (not in scope of spec update): NameError main.py:107, totalCash mapping, Market Gate 3-level logic implementation
+- Backtest framework (v1.1 roadmap): out-of-sample signal validation over 6M horizon
 -->
 
 # ValueMomentum Scanner Constitution
@@ -31,11 +28,14 @@ The scanner MUST operate as a two-stage funnel to balance scale and precision.
 - **Stage 2 (Sniper)**: Deep fundamental analysis on a shortlist of exactly **SHORTLIST_SIZE = 30 tickers** using FMP official API. This value is non-negotiable: 30 × 7 FMP endpoints = 210 calls nominal against a 250 calls/day quota. Exceeding 30 tickers requires a budget audit first.
 - **FMP Unavailability**: If FMP is unreachable (missing key or persistent 5xx after 2 retries), the system MUST send a Telegram alert `⚠️ Sniper FMP indisponible` and stop the scan. There is NO fallback to yfinance for fundamental data — a signal without FMP-verified fundamentals is worse than no signal.
 - Architecture MUST strictly separate broad discovery (yfinance) from precision analysis (FMP).
+- **ETF Pipeline**: ETFs use a **momentum-only** scoring pipeline (Perf 6M 50% + Surperf vs SPY 50%). ETFs have no P/E, ROE, or balance sheet data — framing ETF signals as "undervalued" is incorrect. The correct framing is **sector rotation momentum** (identifying sectors with accelerating price leadership). Leveraged/inverse ETFs MUST be excluded by name pattern before scoring.
 
 ### II. Quality & Stability (The Moat)
 Investment signals MUST be rooted in structural quality.
-- A 3-year average Return on Equity (ROE > 0) is the primary quality gate. ROE < 0 = unconditional exclusion.
-- ROE MUST be computed from FMP `income-statement` (3 annual periods), never from yfinance TTM.
+- A 3-year average Return on Equity (ROE > 0) is the primary quality gate. ROE < 0 = unconditional exclusion. ROE MUST be computed from FMP `income-statement` (3 annual periods), never from yfinance TTM. If `roe_3y` is unavailable (FMP failure), the ticker MUST be excluded — no TTM fallback.
+- **book_value_per_share gates**: `book_value_per_share ≤ 0` → ticker excluded from Quality scoring (ROE is mathematically undefined). `ROE > 150%` with `book_value_per_share < $5` → ROE percentile score capped at 80 + flag `⚠️ ROE possiblement gonflé par buybacks` (buyback-inflated leverage, not operational excellence).
+- **Debt/EBITDA exclusion sectors**: Financials (deposits ≠ normal debt), Real Estate (FFO ≠ GAAP EBITDA), and **Utilities** (structurally high leverage from regulated infrastructure — 5-7x normal and non-predictive of risk) MUST NOT have debt/EBITDA included in Quality scoring. The Quality pillar for these sectors uses 3 sub-criteria: ROE, operating margin, FCF yield.
+- EBITDA ≤ 0 → unconditional exclusion (debt/EBITDA ratio meaningless; business loss-making). Net debt/EBITDA > 6x → unconditional exclusion (excessive balance sheet risk).
 - Fundamental data MUST be verified for freshness: data older than 120 days triggers a warning flag `⚠️ données potentiellement périmées`; data older than 180 days results in automatic exclusion from the final ranking.
 - Tickers with `sector = None` (GICS missing) are excluded from the Actions scoring pipeline — no intra-sector comparison is possible without a valid sector label.
 
@@ -68,7 +68,7 @@ The intra-sector percentile ranking is the foundation of fair valuation comparis
 - Source of truth for sector label: yfinance `.info["sector"]`. FMP sector labels are secondary and may diverge.
 - If `sector = None`: ticker excluded from Actions scoring (logged as `sector_missing`).
 - If a sector has **fewer than 3 tickers** in the scored shortlist: those tickers MUST use cross-universe ranking for all intra-sector metrics. A 1-2 ticker intra-sector percentile is statistically meaningless (single ticker always scores 100th percentile).
-- If the total scored universe falls below **MIN_UNIVERSE_SIZE = 100 tickers**: percentile ranking loses statistical validity; scan MUST be cancelled with a warning log.
+- **MIN_UNIVERSE_SIZE = 100 tickers** check MUST be applied to the **full eligible universe after Chalutier eligibility filters** (before shortlisting to 30). The shortlist is always ≤ 30 by design — checking MIN_UNIVERSE_SIZE on the shortlist will always fail. If the post-eligibility universe (pre-shortlist) falls below 100, percentile ranking loses statistical validity and the scan MUST be cancelled.
 
 ### VII. Signal Persistence (Conviction over Calendar)
 The scoring model — not time — decides when a signal expires.
@@ -113,4 +113,4 @@ The ValueMomentum Scanner Constitution is the sovereign source of truth for arch
 - **Amendments**: Changes to core weights, thresholds, or the FMP budget calculation MUST be documented with financial rationale, version bump, and the amendment date added to the Constants table.
 - **Spec Alignment**: `specs/Spec_ValueMomentum_Scanner.md` is the authoritative implementation reference. Constitution principles always supersede spec details when they conflict. Spec updates that introduce contradictions with this Constitution MUST trigger a Constitution amendment.
 
-**Version**: 1.1.0 | **Ratified**: 2026-05-18 | **Last Amended**: 2026-05-19
+**Version**: 1.1.1 | **Ratified**: 2026-05-18 | **Last Amended**: 2026-05-21

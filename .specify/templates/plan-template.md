@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
+**Note**: This template is filled in by the `/speckit-plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
 
@@ -40,13 +40,15 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- [ ] **I. Funnel Architecture**: Does the feature respect the Chalutier/Sniper separation?
-- [ ] **II. Quality & Stability**: Is the ROE 3Y logic preserved? Is data freshness checked?
-- [ ] **III. Market Gate**: Does the change impact the SPY MA200/VIX survival logic?
-- [ ] **IV. Institutional Liquidity**: Are the Cap > $2B and Vol > $5M filters enforced?
-- [ ] **V. Quantitative Momentum**: Is the 6M momentum strategy followed without short-term traps?
-- [ ] **VI. Technical Standards**: Does it use SQLite WAL, Asyncio, and resilient API patterns?
-- [ ] **VII. Quality Gates**: Are VCR.py and Freezegun used for validation?
+- [ ] **I. Funnel Architecture**: Chalutier/Sniper separation respected? FMP-only for fundamentals? No yfinance fallback for balance sheet data? ETF pipeline momentum-only (not value — sector rotation framing)?
+- [ ] **II. Quality & Stability**: ROE 3Y from FMP (no TTM fallback)? book_value_per_share gates (≤ 0 → exclude; ROE > 150% + BVS < $5 → cap percentile 80)? Utilities/Financials/REITs excluded from debt/EBITDA? Data freshness flags (120d warn, 180d exclude)?
+- [ ] **III. Market Gate**: 4-level priority cascade intact (Panic VIX > 35 → Caution → Bear Light → Normal)? VIX evaluated before EMA200?
+- [ ] **IV. Institutional Liquidity**: Cap > $2B, Dollar Vol > $5M (20d avg), Price > $5, NYSE/NASDAQ/AMEX only?
+- [ ] **V. Quantitative Momentum**: 5 sub-criteria (6M perf, 6M sector outperformance, 3M perf, Earnings Surprise with 90d linear decay, Analyst revision 3M)? Anti-extreme penalties (+25% / -20% on 1M)?
+- [ ] **VI. Sector GICS Integrity**: sector=None → excluded (sector_missing log)? Sectors < 3 tickers → cross-universe fallback? MIN_UNIVERSE_SIZE=100 checked on the full post-eligibility universe (not the 30-ticker shortlist)?
+- [ ] **VII. Signal Persistence**: first_seen_date never reset on reappearance? Top 10 exit by score only (not by calendar rotation)?
+- [ ] **Technical Standards**: SQLite WAL, APScheduler 4.x async, jitter 0.8–1.5s, FMP 2 retries max, html.escape(), 4096-char truncation?
+- [ ] **Quality Gates**: VCR.py cassettes for all network tests? Freezegun for all time-sensitive logic?
 
 ## Project Structure
 
@@ -54,12 +56,12 @@
 
 ```text
 specs/[###-feature]/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+├── plan.md              # This file (/speckit-plan command output)
+├── research.md          # Phase 0 output (/speckit-plan command)
+├── data-model.md        # Phase 1 output (/speckit-plan command)
+├── quickstart.md        # Phase 1 output (/speckit-plan command)
+├── contracts/           # Phase 1 output (/speckit-plan command)
+└── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
 ```
 
 ### Source Code (repository root)

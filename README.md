@@ -22,7 +22,7 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 
 ## Stratégie
 
-Le bot est conçu pour le **Position Trading** (horizon 3 à 12 mois). Il ne s'agit pas de day trading.
+Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'agit pas de day trading.
 
 - **Philosophie** : Acheter des entreprises exceptionnelles (ROE stable sur 3 ans) au moment où le marché commence à les réévaluer à la hausse (Surprise Earnings + Momentum 6M).
 - **Gestion du risque** : Market Gate automatique (SPY > EMA 200 + VIX < 25). En régime de panique (VIX > 35), le bot envoie une alerte et n'émet aucun signal.

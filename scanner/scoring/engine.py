@@ -33,7 +33,9 @@ def compute_momentum_weights(surprise_date: str | None, base_weights: dict, toda
     w = base_weights.copy()
     if surprise_date:
         days_since = (today - _date.fromisoformat(surprise_date)).days
-        effective_surprise = w["surprise_earnings"] * max(0.0, 1.0 - days_since / 90)
+        # Clamp [0, 1] : date future (days_since < 0) garde poids plein ; > 90j → nul
+        decay = max(0.0, min(1.0, 1.0 - days_since / 90))
+        effective_surprise = w["surprise_earnings"] * decay
     else:
         effective_surprise = 0.0
     freed = w["surprise_earnings"] - effective_surprise
@@ -124,7 +126,7 @@ def stock_scoring_pipeline(all_data, symbols):
 
         m_metrics = calculate_momentum_metrics(prices, info, s_data)
 
-        q_ok, q_reason = apply_quality_gates(q_metrics)
+        q_ok, q_reason, q_flags = apply_quality_gates(q_metrics, ticker_info=info)
         v_excluded, v_ok, v_reason = apply_valuation_gates(v_metrics)
 
         if not q_ok:
@@ -142,6 +144,8 @@ def stock_scoring_pipeline(all_data, symbols):
             "mcap_b": info.get("marketCap", 0) / 1e9 if info.get("marketCap") else 0,
             "surprise_date": info.get("surprise_date"),
             "analyst_revision_3m": info.get("analyst_revision_3m"),
+            "roe_capped": q_metrics.get("roe_capped", False),
+            "quality_flags": q_flags,
             **q_metrics,
             **v_metrics,
             **m_metrics,
@@ -155,14 +159,11 @@ def stock_scoring_pipeline(all_data, symbols):
 
     df = pd.DataFrame(rows)
 
-    # T023: MIN_UNIVERSE_SIZE check avant percentile ranking (Lacune 8)
-    min_size = CONFIG["scanner"]["min_universe_size"]
-    if len(df) < min_size:
-        logger.warning(f"universe_too_small ({len(df)} tickers)")
-        return pd.DataFrame()
-
     # Ranking intra-secteur
     df["rank_roe"] = compute_percentile_ranks(df, "roe")
+    # Cap ROE au percentile 80 pour les tickers avec buyback-inflated ROE (spec §4.1)
+    if "roe_capped" in df.columns:
+        df.loc[df["roe_capped"] == True, "rank_roe"] = df.loc[df["roe_capped"] == True, "rank_roe"].clip(upper=80)
     df["rank_margin"] = df.groupby("sector")["margin"].transform(
         compute_percentile_ranks, column="margin"
     )

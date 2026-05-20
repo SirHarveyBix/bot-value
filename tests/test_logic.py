@@ -20,9 +20,9 @@ from scanner.notifier import truncate_message
 
 
 def test_quality_logic():
-    # Cas nominal
+    # Cas nominal — roe_3y obligatoire (champ FMP), returnOnEquity (yfinance) ignoré
     info = {
-        "returnOnEquity": 0.20,
+        "roe_3y": 0.20,           # champ FMP — Règle d'Or
         "operatingMargins": 0.15,
         "totalDebt": 100,
         "totalCash": 50,
@@ -32,29 +32,51 @@ def test_quality_logic():
     }
     metrics = calculate_quality_metrics(info)
     assert metrics["roe"] == 0.20
-    assert metrics["debt_ebitda"] == 2.0 # (100-50)/25
+    assert metrics["debt_ebitda"] == 2.0  # (100-50)/25
     assert metrics["fcf_yield"] == 0.1
     assert metrics["ebitda"] == 25
 
+    # Gate: ROE absent (yfinance uniquement, pas de roe_3y FMP) → exclu
+    info_no_roe = {k: v for k, v in info.items() if k != "roe_3y"}
+    info_no_roe["returnOnEquity"] = 0.20  # TTM yfinance — doit être ignoré
+    metrics_no_roe = calculate_quality_metrics(info_no_roe)
+    assert metrics_no_roe["roe"] is None, "ROE TTM ne doit pas être utilisé (Règle d'Or)"
+    ok_no_roe, reason_no_roe, _ = apply_quality_gates(metrics_no_roe)
+    assert not ok_no_roe
+    assert "ROE 3 ans indisponible" in reason_no_roe
+
     # Gate: EBITDA <= 0
     metrics["ebitda"] = 0
-    ok, reason = apply_quality_gates(metrics)
+    ok, reason, _ = apply_quality_gates(metrics)
     assert not ok
     assert "EBITDA négatif ou nul" in reason
 
     # Gate: ROE négatif
     metrics["ebitda"] = 25
     metrics["roe"] = -0.05
-    ok, reason = apply_quality_gates(metrics)
+    ok, reason, _ = apply_quality_gates(metrics)
     assert not ok
     assert "ROE négatif" in reason
 
     # Gate: Dette trop élevée
     metrics["roe"] = 0.20
     metrics["debt_ebitda"] = 7.0
-    ok, reason = apply_quality_gates(metrics)
+    ok, reason, _ = apply_quality_gates(metrics)
     assert not ok
     assert "Dette/EBITDA trop élevé" in reason
+
+    # Gate: book_value_per_share <= 0 → exclu
+    metrics["debt_ebitda"] = 2.0
+    ok, reason, _ = apply_quality_gates(metrics, ticker_info={"bookValuePerShare": -1.0})
+    assert not ok
+    assert "book_value_per_share" in reason
+
+    # Flag: ROE > 150% avec BVS < 5$ → non exclu, flag + cap
+    metrics["roe"] = 1.60
+    ok, reason, flags = apply_quality_gates(metrics, ticker_info={"bookValuePerShare": 2.5})
+    assert ok
+    assert any("gonflé par buybacks" in f for f in flags)
+    assert metrics.get("roe_capped") is True
 
 def test_valuation_logic():
     # Cas nominal
@@ -197,20 +219,34 @@ def test_sector_diversification():
         assert counts.get(sector, 0) <= 3
 
 def test_sector_exceptions():
-    # Test 1: Financials excluded from debt gate
+    # Test 1: Financials excluded from debt gate — roe_3y requis (FMP)
     info_fin = {
         "sector": "Financials",
-        "returnOnEquity": 0.15,
+        "roe_3y": 0.15,           # FMP obligatoire
         "totalDebt": 1000,
         "totalCash": 100,
-        "ebitda": 50, # Debt/EBITDA = 18x (Normally excluded)
+        "ebitda": 50,             # Debt/EBITDA = 18x — normalement exclu mais pas pour Financials
         "marketCap": 10000
     }
     metrics = calculate_quality_metrics(info_fin)
     # Dans Financials, debt_ebitda doit être None
     assert metrics["debt_ebitda"] is None
-    ok, _ = apply_quality_gates(metrics)
-    assert ok # Ne doit pas être exclu par la dette
+    ok, _, _flags = apply_quality_gates(metrics)
+    assert ok  # Ne doit pas être exclu par la dette
+
+    # Test 1b: Utilities excluded from debt gate (nouvelle règle §4.4)
+    info_util = {
+        "sector": "Utilities",
+        "roe_3y": 0.12,
+        "totalDebt": 5000,
+        "totalCash": 200,
+        "ebitda": 700,            # Dette/EBITDA ~6.8x — normal pour Utilities
+        "marketCap": 50000
+    }
+    metrics_util = calculate_quality_metrics(info_util)
+    assert metrics_util["debt_ebitda"] is None, "Utilities doit être exclu du calcul dette/EBITDA"
+    ok_util, _, _flags_util = apply_quality_gates(metrics_util)
+    assert ok_util, "Utilities ne doit pas être exclu malgré le fort levier structurel"
 
     # Test 2: Biotech exception for negative P/E
     info_bio = {

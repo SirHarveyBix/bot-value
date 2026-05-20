@@ -117,12 +117,6 @@
 - **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
 - **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
 
-## Constitution Alignment
-
-- [ ] **Mandate Check**: Feature does not violate any core principle (Funnel, Market Gate, Liquidity).
-- [ ] **Technical Alignment**: Implementation follows SQLite WAL, Asyncio, and API resilience standards.
-- [ ] **Validation Standards**: Plan includes VCR.py and Freezegun for verification.
-
 ## Assumptions
 
 <!--

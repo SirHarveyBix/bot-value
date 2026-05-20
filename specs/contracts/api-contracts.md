@@ -46,6 +46,29 @@ all_data: dict[str, {
 }]
 ```
 
+### `engine.py` — Winsorisation obligatoire avant percentile ranking
+
+Avant tout calcul de percentile, les ratios bruts sont clampés dans des plages réalistes (`RATIO_CLAMP`). Les valeurs hors plage (erreurs de parsing FMP : `0.001`, `999`) corrompent le ranking entier si non traitées.
+
+```python
+RATIO_CLAMP: dict[str, tuple[float, float]] = {
+    "roe":              (0.0, 1.50),
+    "operating_margin": (-0.50, 0.60),
+    "fcf_yield":        (-0.20, 0.30),
+    "debt_ebitda":      (0.0, 10.0),
+    "pe_ratio":         (1.0, 60.0),
+    "ev_ebitda":        (0.0, 40.0),
+    "peg_ratio":        (-5.0, 5.0),
+}
+
+def winsorize(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+```
+
+La winsorisation s'applique **après** les gates d'exclusion (ROE < 0, EV/EBITDA > 40 déjà gérés) et **avant** `percentile_rank()`.
+
+---
+
 ### `engine.py` → `notifier.py` (via `top_10_stocks`)
 
 ```python
@@ -112,7 +135,16 @@ Propagation : `fetch_fmp_data()` → `fetch_ticker_info()` → `fetch_all_data()
 | `analyst-estimates/{symbol}?period=quarter&limit=3` | 30      | analyst_revision_3m                       |
 | **Total nominal**                                   | **210** | **Marge : 40 calls pour retries ciblés**  |
 
-Circuit-breaker : 2 retries max par ticker. Après 2 échecs 5xx → `FMPUnavailableError` pour ce ticker.
+Circuit-breaker par ticker : 2 retries max. Après 2 échecs 5xx → skip + flag pour ce ticker uniquement.
+
+**Disjoncteur global** (`FMP_CALL_BUDGET_HARD_LIMIT = 245`) : compteur `fmp_call_counter` incrémenté à chaque appel. Si `fmp_call_counter ≥ 245` → `fmp_fetch()` retourne `{}` immédiatement sans appel HTTP. Le scoring finalise avec les données disponibles. Flag `⚠️ Budget FMP proche du quota — shortlist partielle` ajouté au message Telegram.
+
+```python
+FMP_CALL_BUDGET_HARD_LIMIT = 245  # 5 calls de marge sur quota 250/jour
+fmp_call_counter: int = 0         # réinitialisé à chaque nouveau scan
+```
+
+**`FMPUnavailableError`** (cas global) : levée uniquement si FMP est inaccessible pour toute la shortlist (clé absente ou 5xx persistants avant même le 1er ticker). Propagée jusqu'à `main.py` → `send_fmp_error()` + arrêt du scan.
 
 ---
 
