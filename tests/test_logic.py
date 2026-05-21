@@ -1105,14 +1105,14 @@ def test_fmp_call_counter_budget():
     fetcher_module.fmp_call_counter = 0
 
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
     async def run():
-        for t in [f"T{i}" for i in range(30)]:
+        for _t in [f"T{i}" for i in range(30)]:
             if fetcher_module.fmp_call_counter + 7 > 245:
                 break
             fetcher_module.fmp_call_counter += 7

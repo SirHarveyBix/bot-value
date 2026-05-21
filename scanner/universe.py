@@ -12,8 +12,17 @@ from scanner.config import CONFIG, logger
 TTL_FUNDAMENTALS = 24 * 3600
 
 EXCLUDED_ETF_PATTERNS = [
-    "3X", "2X", "-3", "-2", "ULTRA", "ULTRA SHORT",
-    "BEAR", "SHORT", "INVERSE", "DAILY", "PROSHARES",
+    "3X",
+    "2X",
+    "-3",
+    "-2",
+    "ULTRA",
+    "ULTRA SHORT",
+    "BEAR",
+    "SHORT",
+    "INVERSE",
+    "DAILY",
+    "PROSHARES",
 ]
 
 
