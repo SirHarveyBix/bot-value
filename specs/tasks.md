@@ -51,10 +51,10 @@
 **Test indépendant** : `python main.py --now --dry-run` avec mocks VIX=40 → aucun signal, 1 entrée `scans` regime='panic', message Telegram 🚨
 
 - [x] T015 [US2] Créer `scanner/market_gate.py` : enum `MarketRegime(PANIC, PRUDENCE, BEAR_LIGHT, NORMAL)`
-- [x] T016 [US2] Implémenter `evaluate_market_regime(vix, spy_price, spy_ema200) -> MarketRegime` : cascade first-match VIX-priority depuis config
+- [x] T016 [US2] Implémenter `evaluate_market_regime(vix, spy_price, spy_ema200) -> MarketRegime` : cascade first-match VIX-priority depuis config — PRUDENCE si VIX ∈ (25,35] quelle que soit la position SPY/EMA200 (gap corrigé)
 - [x] T017 [P] [US2] `fetch_market_indices()` dans `scanner/fetcher.py` (SPY + ^VIX, 2 ans), EMA200 calculée dans main.py
 - [x] T018 [US2] Intégrer Market Gate dans `main.py` : `evaluate_market_regime()`, PANIC early-return + `save_scan_entry` + `notify_panic`
-- [ ] T019 [US2] Vérifier `scanner/notifier.py` : `notify_panic`, `notify_fmp_unavailable` — HTML, `html.escape()`, truncation 4096
+- [x] T019 [US2] Vérifier `scanner/notifier.py` : `notify_panic`, `notify_fmp_unavailable` — HTML, `html.escape()`, truncation 4096
 - [x] T020 [P] [US2] Test PANIC VIX=40 SPY>EMA200 → "panic" (test_market_gate_panic_vix_over_35)
 - [x] T021 [P] [US2] Test PANIC VIX=36 SPY<EMA200 → "panic" (VIX prime EMA200) (test_market_gate_panic_regardless_spy)
 - [x] T022 [P] [US2] Test PRUDENCE VIX=30 SPY<EMA200 → "prudence"; BEAR_LIGHT VIX=20 → "bear_light"
@@ -85,8 +85,8 @@
 - [ ] T036 [US1] Implémenter `send_signals(top10_actions, regime)` dans `notifier.py` : boucle + `asyncio.sleep(1.5)`, `parse_mode="HTML"`, `disable_web_page_preview=True`
 - [ ] T037 [US1] Implémenter `save_scan(conn, scan_data)` et `save_signals(conn, signals_list)` dans `storage.py` : `first_seen_date` = date courante si nouveau ticker, conservée si réapparition (query `SELECT first_seen_date FROM signals WHERE ticker=? ORDER BY scan_date ASC LIMIT 1`)
 - [ ] T038 [US1] Câbler pipeline complet dans `main.py` : `build_eligible_universe` → MIN_UNIVERSE check → momentum score Chalutier → Top 30 → `fetch_fmp_fundamentals` (avec disjoncteur) → `stock_scoring_pipeline` → Top 10 → `save_scan` + `save_signals` → `send_signals`
-- [ ] T039 [P] [US1] Test intégration (VCR + Freezegun mercredi 10h00 ET) : pipeline complet → 1 entrée `scans`, 10 entrées `signals`, `score_global` ∈ [0,100] pour chaque ticker, jamais NaN
-- [ ] T040 [P] [US1] Test budget FMP : mock `fmp_call_counter`, run 30 tickers → assert `fmp_call_counter ≤ 245` (SC-001)
+- [x] T039 [P] [US1] Test intégration (VCR + Freezegun mercredi 10h00 ET) : pipeline complet → 1 entrée `scans`, 10 entrées `signals`, `score_global` ∈ [0,100] pour chaque ticker, jamais NaN
+- [x] T040 [P] [US1] Test budget FMP : mock `fmp_call_counter`, run 30 tickers → assert `fmp_call_counter ≤ 245` (SC-001)
 
 **Checkpoint** : `python main.py --now --force` → message Telegram reçu dans les 15 min avec Top 10, scores non-nuls. Budget FMP ≤ 245. Scanner v1.0 MVP fonctionnel.
 
@@ -103,7 +103,7 @@
 - [ ] T043 [US3] Implémenter `earnings_calendar_check(ticker, calendar_data) -> str|None` dans `scanner/filters.py` : date earnings dans `[today, today + 14j]` → retourne `📅 Earnings à venir : {date}` (tag informatif, non bloquant)
 - [ ] T044 [US3] Implémenter concentration sectorielle dans `scanner/filters.py` : `apply_sector_concentration(ranked_df, max_per_sector=3) -> DataFrame` → si secteur dépasse plafond, remplace overflow par meilleurs tickers restants hors-secteur
 - [ ] T045 [US3] Câbler `filters.py` dans pipeline `engine.py` / `main.py` : freshness check avant ranking final, earnings tag ajouté aux `flags` JSON du signal, concentration sectorielle appliquée sur Top 10 avant envoi
-- [ ] T046 [P] [US3] Tests `tests/test_logic.py` : fixtures données manquantes → BVS ≤ 0 exclu avec reason, ROE None exclu "indisponible", sector=None exclu `sector_missing`, données > 180j exclues ranking
+- [x] T046 [P] [US3] Tests `tests/test_logic.py` : fixtures données manquantes → BVS ≤ 0 exclu avec reason, ROE None exclu "indisponible", sector=None exclu `sector_missing`, données > 180j exclues ranking
 
 **Checkpoint** : FR-003 respecté (yfinance non utilisé pour ROE/marges). US3 acceptance criteria 1–6 passent tous.
 
@@ -118,9 +118,9 @@
 - [x] T047 [US4] Ajouter `CREATE TABLE IF NOT EXISTS scanned_universe` dans `scanner/storage.py` (+ INDEX scan_date)
 - [x] T048 [US4] Implémenter `save_scanned_universe(eligible_df, shortlist_symbols, top10_symbols, scan_date)` dans `storage.py`
 - [x] T049 [US4] Câbler `save_scanned_universe` dans `main.py` : après scoring + post-filtering, avant `save_signals`
-- [x] T050 [US4] `update_signal_returns()` implémenté dans `storage.py` (async, yfinance 30j/90j, 0 appel FMP) — DOIT utiliser le même pattern chunked que `fetch_prices_chunked` (chunks 100 tickers + `asyncio.sleep(2.0)`) pour éviter ban IP 429 à mesure que l'historique grossit
+- [x] T050 [US4] `update_signal_returns()` implémenté dans `storage.py` (async, yfinance 30j/90j, 0 appel FMP) — pattern chunked 100 tickers + sleep(2.0) + sentinel -1.0 pour tickers délistés (ne plus retenter)
 - [x] T051 [US4] Job APScheduler `update_signal_returns` 18h00 ET dans `main.py`
-- [ ] T052 [P] [US4] Test `tests/test_integration_vcr.py` : 2 scans consécutifs (Freezegun J et J+31) → `first_seen_date` non réinitialisée sur réapparition, `scanned_universe` peuplée, après 31j mock `return_30d` calculé
+- [x] T052 [P] [US4] Test `tests/test_integration_vcr.py` : 2 scans consécutifs (Freezegun J et J+31) → `first_seen_date` non réinitialisée sur réapparition, `scanned_universe` peuplée, après 31j mock `return_30d` calculé
 
 **Checkpoint** : SC-006 validé (`SELECT avg(return_30d) FROM signals` retourne résultat calculable). `first_seen_date` stable sur 2 scans.
 
@@ -146,7 +146,7 @@
 
 **Objectif** : Tests hermétiques complets, déploiement Mac Mini, validation finale
 
-- [ ] T058 Créer `tests/conftest.py` : configuration VCR.py `record_mode="none"` par défaut, cassettes dans `tests/cassettes/`, fixtures Freezegun (mercredi 10h00 ET)
+- [x] T058 Créer `tests/conftest.py` : configuration VCR.py `record_mode="none"` par défaut, cassettes dans `tests/cassettes/`, fixtures Freezegun (mercredi 10h00 ET)
 - [ ] T059 [P] Créer `tests/test_logic.py` complet : tests statiques scoring — `apply_quality_gates` (BVS ≤ 0, ROE None, ROE < 0, ROE > 150% + BVS < 5$ cap), decay earnings clampé [0,1], pénalités anti-extrême, winsorisation `RATIO_CLAMP`, `evaluate_market_regime` 4 scénarios
 - [ ] T060 [P] Créer `tests/test_fetcher_vcr.py` : connecteurs yfinance chunked (chunk size 100, 2 cassettes) + FMP 7 endpoints (cassette par ticker) + disjoncteur 245 (mock counter)
 - [ ] T061 Créer `tests/test_integration_vcr.py` : pipeline complet (VCR + Freezegun) — scan complet → `scans` + `signals` écrits, Market Gate PANIC → 0 signaux, FMP indisponible → Telegram erreur + 0 signaux
@@ -248,7 +248,7 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 ### 9.2 Améliorations scoring
 
 - [x] T074 [P] [US1] Ajouter ROIC composite dans `scanner/scoring/quality.py` : extraire `roicTTM` depuis `key-metrics-ttm` (endpoint déjà appelé — 0 call FMP supplémentaire), composite `roe_composite = 0.6 × roe_3y + 0.4 × roicTTM`, remplacer `roe_3y` seul dans le calcul percentile Qualité (§4.1 spec)
-- [x] T075 [P] [US1] Remplacer `perf_6m` brut par momentum ajusté volatilité dans `scanner/scoring/momentum.py` : `stddev_6m = returns_daily.tail(126).std()`, `momentum_adj = return_6m / stddev_6m if stddev_6m > 0 else 0.0`, utiliser `momentum_adj` à la place de `perf_6m` dans le percentile rank (§4.1 Pilier 3 spec)
+- [x] T075 [P] [US1] Remplacer `perf_6m` brut par momentum ajusté volatilité dans `scanner/scoring/momentum.py` : `VOLATILITY_FLOOR = 0.0005`, `effective_vol = max(stddev_6m, VOLATILITY_FLOOR)`, `momentum_adj = return_6m / effective_vol` — plancher 0.05% évite division par quasi-zéro (§4.1 Pilier 3 spec)
 - [x] T076 [US1] Implémenter `compute_inverse_vol_weights(tickers, price_data) -> dict[str, float]` dans `scanner/scoring/engine.py` : σ sur 60j, `weight = (1/σ) / Σ(1/σ)`, retourne `{ticker: pct}` ; ajouter colonne `suggested_weight_pct REAL` à la table `signals` dans `scanner/storage.py` (§5.5 spec)
 
 **Checkpoint** : ROIC disponible sur AAPL/MSFT (non-None). `momentum_adj` diffère de `perf_6m` pour tickers haute volatilité. `suggested_weight_pct` somme = 100% sur le Top 10.
@@ -260,6 +260,12 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 - [x] T079 [P] Test inverse vol dans `tests/test_logic.py` : 2 tickers σ=0.01 et σ=0.02 → poids ticker σ=0.01 = 2× poids ticker σ=0.02 ; somme des poids = 100%
 
 **Checkpoint** : 3 tests passent en isolation (données statiques, 0 appel API).
+
+### 9.4 Corrections qualité scoring (v1.1 bugfixes)
+
+- [ ] T080 [US1] Implémenter `sanity_check_gate(prices_df, symbol) -> bool` dans `scanner/filters.py` : si variation journalière J0/J-1 < -45% → exclure ticker du scoring du jour + `logger.warning("SANITY_GATE exclu {symbol}")` — guard contre stock splits non synchronisés et glitches Yahoo Finance (§5.1b spec)
+
+**Checkpoint** : Jour d'un split simulé (-75%) → ticker exclu. Chute légitime (-30%) → ticker maintenu.
 
 ---
 

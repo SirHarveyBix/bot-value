@@ -88,6 +88,12 @@ async def test_full_pipeline_vcr(tmp_path):
                             save_signals(ranked_df.head(3), pd.DataFrame(), all_data, len(stocks), market_data=market_data)
                             assert os.path.exists(db_file)
 
+                        # T039 — score_global ∈ [0,100], jamais NaN
+                        assert "score_global" in ranked_df.columns
+                        assert not ranked_df["score_global"].isna().any(), "score_global contient des NaN"
+                        assert (ranked_df["score_global"] >= 0).all(), "score_global < 0 détecté"
+                        assert (ranked_df["score_global"] <= 100).all(), "score_global > 100 détecté"
+
 
 # T042 — Budget FMP ≤ 250 calls pour 30 tickers
 @pytest.mark.asyncio
@@ -126,7 +132,7 @@ async def test_fmp_budget_counter():
             except Exception:
                 pass
 
-    assert call_count <= 250, f"Budget FMP dépassé: {call_count} calls > 250"
+    assert call_count <= 245, f"Budget FMP dépassé: {call_count} calls > 245 (SC-001)"
 
 
 # T043 — Pipeline panic : VIX=40 → 0 signaux, notify_panic appelé
@@ -218,8 +224,7 @@ async def test_update_signal_returns_no_rows(tmp_path):
 async def test_update_signal_returns_negative(tmp_path):
     """Signal avec price_at_signal=100, prix actuel=80 → return_30d=-0.2."""
     import sqlite3
-    import yfinance as yf
-    from unittest.mock import patch, AsyncMock, MagicMock
+    from unittest.mock import patch, MagicMock
     import scanner.storage as storage_module
     from scanner.storage import init_db, update_signal_returns
 
@@ -242,11 +247,13 @@ async def test_update_signal_returns_negative(tmp_path):
         conn.commit()
         conn.close()
 
-        mock_hist = pd.DataFrame({"Close": [80.0]})
-        mock_ticker = MagicMock(spec=yf.Ticker)
-        mock_ticker.history = MagicMock(return_value=mock_hist)
+        # L'implémentation utilise yf.download (batch) avec MultiIndex columns
+        mock_df = pd.DataFrame(
+            data=[[80.0]],
+            columns=pd.MultiIndex.from_tuples([("TEST", "Close")]),
+        )
 
-        with patch("yfinance.Ticker", return_value=mock_ticker):
+        with patch("yfinance.download", return_value=mock_df):
             await update_signal_returns()
 
         conn = sqlite3.connect(db_file)
@@ -354,6 +361,66 @@ async def test_fetch_fmp_data_5xx_raises():
         "scoring": {},
     }
     with patch("scanner.fetcher.CONFIG", cfg):
-        with patch("asyncio.sleep"):  # accélérer le retry
+        with patch("asyncio.sleep"):
             with pytest.raises(FMPUnavailableError):
                 await fetch_fmp_data(mock_client, "AAPL")
+
+
+# T052 — 2 scans consécutifs J et J+31 : first_seen_date préservée, scanned_universe peuplée
+@pytest.mark.asyncio
+async def test_first_seen_date_preserved_across_scans(tmp_path):
+    """
+    Scan J : AAPL apparu → first_seen_date = J.
+    Scan J+31 : AAPL réapparaît → first_seen_date conservée = J (non réinitialisée).
+    scanned_universe peuplée à chaque scan.
+    """
+    import sqlite3
+    from unittest.mock import patch
+    from freezegun import freeze_time
+    import scanner.storage as storage_module
+    from scanner.storage import init_db, save_signals_to_db, get_first_seen_date, save_scanned_universe
+
+    db_file = str(tmp_path / "test_t052.db")
+    scan_date_j = "2026-01-01"
+    scan_date_j31 = "2026-02-01"
+
+    stock_row = pd.DataFrame([{
+        "symbol": "AAPL", "name": "Apple Inc.", "score_global": 85.0,
+        "score_quality": 80.0, "score_valuation": 75.0, "score_momentum": 90.0,
+        "pe": 28.5, "roe": 0.20, "margin": 0.15, "perf_6m": 0.12,
+        "outperf_6m": 0.05,
+    }])
+    market_data = {"regime": "normal", "spy_price": 500.0, "spy_ema200": 480.0, "vix": 15.0}
+
+    with patch.object(storage_module, "DB_PATH", db_file):
+        init_db()
+
+        # Scan J
+        with freeze_time(scan_date_j):
+            save_signals_to_db(stock_row, pd.DataFrame(), {}, 100, market_data=market_data)
+
+        conn = sqlite3.connect(db_file)
+        first_date = get_first_seen_date(conn, "AAPL")
+        conn.close()
+        assert first_date == scan_date_j, f"first_seen_date doit être {scan_date_j}"
+
+        # Scan J+31 : AAPL réapparaît
+        with freeze_time(scan_date_j31):
+            save_signals_to_db(stock_row, pd.DataFrame(), {}, 100, market_data=market_data)
+
+        conn = sqlite3.connect(db_file)
+        second_date = get_first_seen_date(conn, "AAPL")
+        conn.close()
+        assert second_date == scan_date_j, "first_seen_date ne doit PAS être réinitialisée lors d'une réapparition"
+
+        # scanned_universe peuplée
+        eligible_df = pd.DataFrame([{"symbol": "AAPL", "m_score": 75.0}])
+        await save_scanned_universe(eligible_df, ["AAPL"], ["AAPL"], scan_date=scan_date_j)
+
+        conn = sqlite3.connect(db_file)
+        row = conn.execute("SELECT ticker, in_shortlist, in_top10 FROM scanned_universe WHERE scan_date=?", (scan_date_j,)).fetchone()
+        conn.close()
+        assert row is not None, "scanned_universe doit contenir AAPL"
+        assert row[0] == "AAPL"
+        assert row[1] == 1  # in_shortlist
+        assert row[2] == 1  # in_top10

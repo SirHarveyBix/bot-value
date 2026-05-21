@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from scanner.config import logger
 
+VOLATILITY_FLOOR = 0.0005  # Plancher 0.05% σ journalier — évite division par quasi-zéro
+
 
 def compute_analyst_revision_3m(estimates: list) -> float | None:
     """Calcule la révision EPS analystes sur 3 mois (Lacune 5)."""
@@ -50,8 +52,8 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
         if perf_6m is not None and len(close) >= 126:
             daily_returns = close.iloc[-126:].pct_change().dropna()
             sigma_6m = float(daily_returns.std())
-            if sigma_6m > 1e-9:
-                momentum_adj = perf_6m / sigma_6m
+            effective_vol = max(sigma_6m, VOLATILITY_FLOOR)
+            momentum_adj = perf_6m / effective_vol
 
         # Surperf sectorielle
         outperf_6m = None
@@ -74,7 +76,7 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
         }
     except Exception as e:
         logger.error(f"Erreur calcul momentum: {e}")
-        return {}
+        return None
 
 def apply_momentum_penalties(score, metrics):
     """

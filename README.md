@@ -37,7 +37,7 @@ Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'ag
 - **macOS** (optimisé Mac Mini, mais fonctionne sur tout Mac)
 - **Python 3.11+** — vérifiez avec `python3 --version`
 - **Git** — pour cloner le projet
-- **Compte Financial Modeling Prep** (gratuit) — 250 appels/jour suffisent
+- **Compte Financial Modeling Prep** (gratuit) — limite nominale 250 appels/jour, disjoncteur hard limit à 245
 - **Bot Telegram** — pour recevoir les alertes
 
 ---

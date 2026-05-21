@@ -27,7 +27,7 @@ def calculate_quality_metrics(ticker_info):
 
         debt_ebitda = None
         if not exclude_debt:
-            if net_debt is not None and ebitda and ebitda > 0:
+            if net_debt is not None and ebitda is not None and ebitda > 0:
                 debt_ebitda = net_debt / ebitda
 
         # FCF Yield Proxy (Note: yfinance FCF data can be noisy/unreliable)

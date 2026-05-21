@@ -145,7 +145,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
             msg += f"⏱️ Signal actif depuis : {days_active} jours\n"
 
         if row.get("earnings_date"):
-            msg += f"📅 Earnings : {row['earnings_date']}\n"
+            msg += f"📅 Earnings : {escape_html(str(row['earnings_date']))}\n"
 
         if row.get("warning"):
             msg += f"⚠️ {escape_html(row['warning'])}\n"

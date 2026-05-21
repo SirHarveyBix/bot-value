@@ -83,6 +83,8 @@ def _check_single_ticker(symbol):
                 cache.set("fundamentals", symbol, info)
 
         is_eligible, reason = get_eligibility_filters(info)
+        if not is_eligible:
+            logger.debug(f"Exclu {symbol}: {reason}")
         return symbol if is_eligible else None
     except Exception as e:
         logger.error(f"Erreur filtrage {symbol}: {e}")

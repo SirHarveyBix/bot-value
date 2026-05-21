@@ -18,6 +18,7 @@ _NEW_COLS = [
     "ALTER TABLE signals ADD COLUMN return_90d REAL",
     "ALTER TABLE signals ADD COLUMN flags TEXT",
     "ALTER TABLE signals ADD COLUMN suggested_weight_pct REAL",
+    "ALTER TABLE signals ADD COLUMN outperf_6m REAL",
 ]
 
 
@@ -101,32 +102,31 @@ def get_first_seen_date(conn, symbol: str) -> str | None:
     return row[0] if row else None
 
 
-def save_scan_entry(market_data: dict):
+async def save_scan_entry(market_data: dict):
     """Enregistre un scan sans signaux (cas panic/abort)."""
     init_db()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
     scan_date = datetime.now().strftime("%Y-%m-%d")
-    try:
-        cursor.execute(
-            "INSERT INTO scans (scan_date, market_regime, spy_price, spy_ema200, vix, universe_size, eligible_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                scan_date,
-                market_data.get("regime", "unknown"),
-                market_data.get("spy_price"),
-                market_data.get("spy_ema200"),
-                market_data.get("vix"),
-                0, 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL;")
+        try:
+            await db.execute(
+                "INSERT INTO scans (scan_date, market_regime, spy_price, spy_ema200, vix, universe_size, eligible_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    scan_date,
+                    market_data.get("regime", "unknown"),
+                    market_data.get("spy_price"),
+                    market_data.get("spy_ema200"),
+                    market_data.get("vix"),
+                    0, 0
+                )
             )
-        )
-    except sqlite3.IntegrityError:
-        cursor.execute(
-            "UPDATE scans SET market_regime = ?, spy_price = ?, spy_ema200 = ?, vix = ? WHERE scan_date = ?",
-            (market_data.get("regime"), market_data.get("spy_price"), market_data.get("spy_ema200"), market_data.get("vix"), scan_date)
-        )
-    conn.commit()
-    conn.close()
+        except sqlite3.IntegrityError:
+            await db.execute(
+                "UPDATE scans SET market_regime = ?, spy_price = ?, spy_ema200 = ?, vix = ? WHERE scan_date = ?",
+                (market_data.get("regime"), market_data.get("spy_price"), market_data.get("spy_ema200"), market_data.get("vix"), scan_date)
+            )
+        await db.commit()
 
 
 def save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_data=None):
@@ -174,12 +174,12 @@ def save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_dat
 
         cursor.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, score_quality, score_valuation, "
-            "score_momentum, pe, roe, margin, perf_6m, first_seen_date, price_at_signal) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "score_momentum, pe, roe, margin, perf_6m, outperf_6m, first_seen_date, price_at_signal) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 scan_id, symbol, row.get("name", ""), "stock", i + 1,
                 row["score_global"], row["score_quality"], row.get("score_valuation"), row["score_momentum"],
-                row.get("pe"), row.get("roe"), row.get("margin"), row.get("perf_6m"),
+                row.get("pe"), row.get("roe"), row.get("margin"), row.get("perf_6m"), row.get("outperf_6m"),
                 first_seen, price_at_signal
             )
         )
@@ -198,12 +198,12 @@ def save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_dat
 
         cursor.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, score_quality, score_valuation, "
-            "score_momentum, pe, roe, margin, perf_6m, first_seen_date, price_at_signal) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "score_momentum, pe, roe, margin, perf_6m, outperf_6m, first_seen_date, price_at_signal) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 scan_id, symbol, row.get("name", ""), "etf", i + 1,
                 row["score_global"], 0, 0, 0,
-                None, None, None, row.get("perf_6m"),
+                None, None, None, row.get("perf_6m"), row.get("outperf_6m"),
                 first_seen, price_at_signal
             )
         )
@@ -289,6 +289,12 @@ async def update_signal_returns():
         for row_id, symbol, price_at_signal in rows_30d:
             price_now = prices_30d.get(symbol)
             if price_now is None:
+                # Sentinel -1.0 : ticker délisté/introuvable — ne plus retenter
+                await db.execute(
+                    "UPDATE signals SET price_30d_later = -1.0 WHERE id = ?",
+                    (row_id,)
+                )
+                updated += 1
                 continue
             return_30d = (price_now - price_at_signal) / price_at_signal
             await db.execute(
@@ -301,6 +307,12 @@ async def update_signal_returns():
         for row_id, symbol, price_at_signal in rows_90d:
             price_now = prices_90d.get(symbol)
             if price_now is None:
+                # Sentinel -1.0 : ticker délisté/introuvable — ne plus retenter
+                await db.execute(
+                    "UPDATE signals SET price_90d_later = -1.0 WHERE id = ?",
+                    (row_id,)
+                )
+                updated += 1
                 continue
             return_90d = (price_now - price_at_signal) / price_at_signal
             await db.execute(
@@ -313,7 +325,7 @@ async def update_signal_returns():
     logger.info(f"Retours 30j/90j mis à jour ({updated} mises à jour sur {len(rows_30d)+len(rows_90d)} signaux).")
 
 
-def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10_symbols: list[str], scan_date: str):
+async def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10_symbols: list[str], scan_date: str):
     """
     Stocke TOUS les tickers post-éligibilité Chalutier (pré-shortlist) dans scanned_universe.
     Anti survivorship bias : permet le backtesting out-of-sample en comparant Top 10 vs univers entier.
@@ -325,8 +337,6 @@ def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10_symbo
     shortlist_set = set(shortlist_symbols)
     top10_set = set(top10_symbols)
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL;")
     rows = []
     for rank, row in enumerate(eligible_df.itertuples(), start=1):
         symbol = getattr(row, "symbol", None)
@@ -344,12 +354,13 @@ def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10_symbo
             getattr(row, "price_at_scan", None),
         ))
 
-    conn.executemany(
-        "INSERT INTO scanned_universe "
-        "(scan_date, ticker, score_momentum, rank_chalutier, in_shortlist, in_top10, market_cap, sector, price_at_scan) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows
-    )
-    conn.commit()
-    conn.close()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL;")
+        await db.executemany(
+            "INSERT INTO scanned_universe "
+            "(scan_date, ticker, score_momentum, rank_chalutier, in_shortlist, in_top10, market_cap, sector, price_at_scan) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows
+        )
+        await db.commit()
     logger.info(f"scanned_universe : {len(rows)} tickers enregistrés pour {scan_date}")

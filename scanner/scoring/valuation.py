@@ -31,7 +31,7 @@ def calculate_valuation_metrics(ticker_info):
         }
     except Exception as e:
         logger.error(f"Erreur calcul métriques valorisation: {e}")
-        return {}
+        return None
 
 def apply_valuation_gates(metrics):
     """

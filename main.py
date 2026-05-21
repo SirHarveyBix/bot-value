@@ -64,7 +64,7 @@ async def run_scanner(force=False):
                 "spy_ema200": ema200,
                 "vix": current_vix,
             }
-            save_scan_entry(market_data)
+            await save_scan_entry(market_data)
             await notify_panic(current_vix, current_spy, ema200)
             return
 
@@ -120,7 +120,7 @@ async def run_scanner(force=False):
         # T049: Anti survivorship bias — stocker univers Chalutier complet
         scan_date_str = datetime.now().strftime("%Y-%m-%d")
         top10_symbols = top_10_stocks["symbol"].tolist() if not top_10_stocks.empty else []
-        save_scanned_universe(momentum_ranked_df, shortlist_stocks, top10_symbols, scan_date=scan_date_str)
+        await save_scanned_universe(momentum_ranked_df, shortlist_stocks, top10_symbols, scan_date=scan_date_str)
 
         # 8. Storage
         market_data = {

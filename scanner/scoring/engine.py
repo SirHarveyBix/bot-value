@@ -240,7 +240,7 @@ def stock_scoring_pipeline(all_data, symbols):
 
     v_results = df.apply(compute_valuation_score, axis=1)
     df["score_valuation"] = v_results.apply(lambda x: x[0])
-    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1])
+    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1]).fillna(False)
 
     # T013: Score momentum per-row avec décroissance earnings (Lacune 6)
     base_mw = CONFIG["scoring"]["momentum_subweights"]
@@ -327,8 +327,8 @@ def compute_inverse_vol_weights(ranked_df: pd.DataFrame, all_data: dict) -> pd.D
 
     for sym in symbols:
         prices = all_data.get(sym, {}).get("prices")
-        if prices is not None and len(prices) >= 63:
-            daily_ret = prices["Close"].iloc[-63:].pct_change().dropna()
+        if prices is not None and len(prices) >= 60:
+            daily_ret = prices["Close"].iloc[-60:].pct_change().dropna()
             sigma = float(daily_ret.std())
             if sigma > 1e-9:
                 inv_vols[sym] = 1.0 / sigma

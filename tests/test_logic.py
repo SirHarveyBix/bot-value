@@ -742,33 +742,35 @@ def test_parse_fmp_response_empty():
 
 def test_momentum_adj_higher_for_stable_trend():
     """
-    Même return_6m, σ plus faible → momentum_adj plus élevé.
-    Série linéaire (stable) vs série parabolique (volatile fin de période).
+    Tendance stable (σ faible) vs tendance volatile (σ élevé) → momentum_adj plus élevé pour stable.
+    σ des deux séries bien au-dessus de VOLATILITY_FLOOR (0.05%) pour tester la logique réelle.
     """
     import numpy as np
     from scanner.scoring.momentum import calculate_momentum_metrics
 
+    np.random.seed(42)
     dates = pd.date_range("2024-01-01", periods=252, freq="B")
+    trend = np.linspace(100, 130, 252)
 
-    # Série 1 : progression linéaire régulière (σ faible)
-    prices_linear = pd.DataFrame(
-        {"Close": np.linspace(100, 130, 252)}, index=dates
+    # Série stable : trend + bruit faible (σ_daily ≈ 0.3%)
+    prices_stable = pd.DataFrame(
+        {"Close": np.maximum(trend + np.random.normal(0, 0.3, 252), 10.0)},
+        index=dates,
     )
 
-    # Série 2 : flat puis spike final (σ élevé, même return_6m ≈ +30%)
-    flat = np.full(126, 100.0)
-    spike = np.linspace(100, 130, 126)
+    # Série volatile : même tendance + bruit fort (σ_daily ≈ 3%)
     prices_volatile = pd.DataFrame(
-        {"Close": np.concatenate([flat, spike])}, index=dates
+        {"Close": np.maximum(trend + np.random.normal(0, 3.0, 252), 10.0)},
+        index=dates,
     )
 
-    m_linear = calculate_momentum_metrics(prices_linear, {})
+    m_stable = calculate_momentum_metrics(prices_stable, {})
     m_volatile = calculate_momentum_metrics(prices_volatile, {})
 
-    assert m_linear["momentum_adj"] is not None
+    assert m_stable["momentum_adj"] is not None
     assert m_volatile["momentum_adj"] is not None
-    # Même return_6m approximatif (~30%), σ linéaire < σ volatile → adj_linéaire > adj_volatile
-    assert m_linear["momentum_adj"] > m_volatile["momentum_adj"]
+    # Bruit stable σ << bruit volatile σ → momentum_adj stable > volatile (même tendance)
+    assert m_stable["momentum_adj"] > m_volatile["momentum_adj"]
 
 
 # ── v1.1 T079 — Inverse volatility weights ───────────────────────────────────
@@ -809,3 +811,70 @@ def test_inverse_vol_weights_low_vol_gets_more():
     w_b = result.loc[result["symbol"] == "B", "suggested_weight_pct"].iloc[0]
     # A moins volatile → poids plus élevé
     assert w_a > w_b
+
+
+# ── Market Gate — gap VIX [25,35] + SPY ≥ EMA200 ─────────────────────────────
+
+def test_market_gate_prudence_vix_high_spy_above_ema():
+    """VIX=30 (>25), SPY ≥ EMA200 → regime=prudence (VIX prime SPY position)."""
+    assert _make_market_regime(current_vix=30.0, current_spy=500.0, ema200=480.0) == "prudence"
+
+
+# ── T019 — notify_panic / notify_fmp_unavailable HTML ────────────────────────
+
+@pytest.mark.asyncio
+async def test_notify_panic_html_escaping():
+    """notify_panic : VIX avec décimale → message HTML valide, envoyé via send_message_safe."""
+    from unittest.mock import AsyncMock, patch
+    from scanner.notifier import notify_panic
+
+    sent_messages = []
+
+    async def mock_send(bot, chat_id, text, **kwargs):
+        sent_messages.append(text)
+
+    with patch("scanner.notifier._get_bot", return_value=(object(), "123")):
+        with patch("scanner.notifier.send_message_safe", side_effect=mock_send):
+            await notify_panic(vix=40.5, spy=450.0, ema200=480.0)
+
+    assert len(sent_messages) == 1
+    msg = sent_messages[0]
+    assert "40.5" in msg
+    assert "450.00" in msg
+    assert "&gt;" in msg  # VIX > 35 → html.escape
+    assert len(msg) <= 4096
+
+
+@pytest.mark.asyncio
+async def test_notify_fmp_unavailable_html():
+    """notify_fmp_unavailable : message HTML envoyé, ≤ 4096 chars."""
+    from unittest.mock import patch
+    from scanner.notifier import notify_fmp_unavailable
+
+    sent_messages = []
+
+    async def mock_send(bot, chat_id, text, **kwargs):
+        sent_messages.append(text)
+
+    with patch("scanner.notifier._get_bot", return_value=(object(), "123")):
+        with patch("scanner.notifier.send_message_safe", side_effect=mock_send):
+            await notify_fmp_unavailable()
+
+    assert len(sent_messages) == 1
+    msg = sent_messages[0]
+    assert "FMP" in msg
+    assert len(msg) <= 4096
+
+
+# ── VOLATILITY_FLOOR — momentum plancher ─────────────────────────────────────
+
+def test_momentum_adj_flat_price_uses_floor():
+    """Prix constant → σ ≈ 0 → momentum_adj calculé avec VOLATILITY_FLOOR (pas None)."""
+    import numpy as np
+    from scanner.scoring.momentum import calculate_momentum_metrics
+
+    prices = pd.DataFrame({"Close": np.full(252, 100.0)})
+    metrics = calculate_momentum_metrics(prices, {})
+    # perf_6m = 0 car prix constant
+    assert metrics.get("momentum_adj") is not None
+    assert metrics["momentum_adj"] == 0.0  # 0 / FLOOR = 0
