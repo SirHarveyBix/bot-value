@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from datetime import datetime
-from scanner.config import CONFIG, logger
+
 import aiosqlite
 import yfinance as yf
-    
+
+from scanner.config import CONFIG, logger
+
 DB_PATH = "data/signals/scanner_history.db"
 
 _NEW_COLS = [

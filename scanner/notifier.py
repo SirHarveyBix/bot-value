@@ -37,7 +37,6 @@ def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
     suffix = "\n[message tronqué]"
     truncated = msg[:max_chars - len(suffix)] + suffix
     open_tags: list[str] = []
-    pos = 0
     for m in re.finditer(r'<(/?)(\w+)[^>]*>', truncated):
         tag = m.group(2).lower()
         if tag not in _TELEGRAM_INLINE_TAGS:

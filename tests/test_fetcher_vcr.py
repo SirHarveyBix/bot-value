@@ -1,7 +1,9 @@
-import pytest
 from unittest.mock import patch
-from scanner.config import CONFIG, logger
-from scanner.fetcher import fetch_all_data, FMPUnavailableError
+
+import pytest
+
+from scanner.config import logger
+from scanner.fetcher import fetch_all_data
 
 pytestmark = pytest.mark.asyncio
 

@@ -10,7 +10,6 @@ from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, c
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
 
-
 RATIO_CLAMP: dict[str, tuple[float, float]] = {
     "roe":              (0.0,   1.50),
     "margin":           (-0.50, 0.60),
@@ -31,7 +30,8 @@ def _apply_winsorization(df: pd.DataFrame) -> pd.DataFrame:
     """Applique RATIO_CLAMP sur toutes les colonnes de ratio présentes dans df."""
     for col, (lo, hi) in RATIO_CLAMP.items():
         if col in df.columns:
-            df[col] = df[col].apply(lambda v: winsorize(v, lo, hi) if pd.notna(v) else v)
+            _lo, _hi = lo, hi
+            df[col] = df[col].apply(lambda v, lo=_lo, hi=_hi: winsorize(v, lo, hi) if pd.notna(v) else v)
     return df
 
 
@@ -190,7 +190,7 @@ def stock_scoring_pipeline(all_data, symbols):
     df["rank_roe"] = compute_percentile_ranks(df, "roe")
     # Cap ROE au percentile 80 pour les tickers avec buyback-inflated ROE (spec §4.1)
     if "roe_capped" in df.columns:
-        df.loc[df["roe_capped"] == True, "rank_roe"] = df.loc[df["roe_capped"] == True, "rank_roe"].clip(upper=80)
+        df.loc[df["roe_capped"].fillna(False), "rank_roe"] = df.loc[df["roe_capped"].fillna(False), "rank_roe"].clip(upper=80)
     df["rank_margin"] = df.groupby("sector")["margin"].transform(
         compute_percentile_ranks, column="margin"
     )

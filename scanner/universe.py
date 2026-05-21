@@ -1,13 +1,12 @@
 import json
 import os
-
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 import yfinance as yf
 
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
-from datetime import datetime, timedelta
 
 # On définit le TTL du cache fondamentaux (24h)
 TTL_FUNDAMENTALS = 24 * 3600
@@ -76,7 +75,7 @@ def _check_single_ticker(symbol):
             delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
             if delay > 0:
                 time.sleep(delay)
-                
+
             ticker = yf.Ticker(symbol)
             info = ticker.info
             if info:

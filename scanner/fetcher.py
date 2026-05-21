@@ -13,8 +13,8 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
-from scanner.scoring.momentum import compute_analyst_revision_3m
 from scanner.notifier import notify_fmp_unavailable
+from scanner.scoring.momentum import compute_analyst_revision_3m
 
 # TTL depuis config (anti race-condition : 27h > 24h pour éviter expiration 3 min avant scan 09h35)
 TTL_FUNDAMENTALS = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)

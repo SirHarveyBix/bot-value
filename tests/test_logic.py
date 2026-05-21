@@ -1,9 +1,10 @@
 import sys
-import pytest
-import pandas as pd
 from datetime import date, datetime, timedelta
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
 from freezegun import freeze_time
-from unittest.mock import patch, MagicMock
 
 from scanner.filters import (
     check_batch_data_ratio,
@@ -12,11 +13,11 @@ from scanner.filters import (
     earnings_calendar_check,
     filter_post_scoring,
 )
+from scanner.notifier import truncate_message
 from scanner.scoring.engine import compute_momentum_weights, compute_percentile_ranks
 from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics, compute_analyst_revision_3m
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
-from scanner.notifier import truncate_message
 
 
 def test_quality_logic():
@@ -271,7 +272,7 @@ def test_sector_exceptions():
 
 def test_valuation_score_calculation():
     from scanner.scoring.engine import compute_valuation_score
-    
+
     # Cas 1 : Nominal (PEG présent)
     row = pd.Series({
         "rank_pe": 80,
@@ -325,12 +326,12 @@ def test_etf_pipeline():
         "Close": [100] * 130, # Constant price
         "Volume": [1000] * 130
     })
-    
+
     all_data = {
         "ETF1": {"prices": prices},
         "SPY": {"prices": pd.DataFrame({"Close": [100] * 130})}
     }
-    
+
     ranked = etf_scoring_pipeline(all_data, ["ETF1"])
     assert not ranked.empty
     assert ranked.iloc[0]["symbol"] == "ETF1"
@@ -379,8 +380,9 @@ def test_market_gate_normal():
 # T034
 def test_sector_none_exclusion():
     """sector=None → ticker exclu du pipeline (résultat vide)."""
-    from scanner.scoring.engine import stock_scoring_pipeline
     import pandas as pd
+
+    from scanner.scoring.engine import stock_scoring_pipeline
 
     prices = pd.DataFrame({"Close": list(range(1, 260)), "Volume": [1_000_000] * 259})
 
@@ -455,8 +457,9 @@ def test_earnings_decay_fresh():
 # T038
 def test_intra_sector_fallback():
     """Secteur avec 2 tickers → use_cross_universe_ranking=True pour ces tickers."""
-    from scanner.scoring.engine import stock_scoring_pipeline
     import pandas as pd
+
+    from scanner.scoring.engine import stock_scoring_pipeline
 
     def _make_stock_data(sector):
         prices = pd.DataFrame({"Close": list(range(50, 310)), "Volume": [5_000_000] * 260})
@@ -489,6 +492,7 @@ def test_intra_sector_fallback():
     all_data = {f"S{i}": _make_stock_data("Lonely") for i in range(2)}
     # On doit avoir assez de tickers pour passer MIN_UNIVERSE_SIZE - patch config temporairement
     from unittest.mock import patch
+
     from scanner.config import CONFIG
     patched_config = {
         **CONFIG,
@@ -520,7 +524,7 @@ def test_first_seen_date_preserved(tmp_path):
     db_path = str(tmp_path / "test.db")
 
     with patch("scanner.storage.DB_PATH", db_path):
-        from scanner.storage import init_db, get_first_seen_date, save_signals_to_db
+        from scanner.storage import get_first_seen_date, init_db, save_signals_to_db
 
         init_db()
 
@@ -719,7 +723,7 @@ def test_is_market_open_weekend():
 
 def test_parse_fmp_response_invalid_string():
     """parse_fmp_response avec string 'N/A' → champ = None, pas de crash."""
-    from scanner.fetcher import _parse_fmp_response, FMPRatiosTTM
+    from scanner.fetcher import FMPRatiosTTM, _parse_fmp_response
 
     result = _parse_fmp_response(
         [{"priceEarningsRatioTTM": "N/A", "returnOnEquityTTM": 0.15}],
@@ -733,7 +737,7 @@ def test_parse_fmp_response_invalid_string():
 
 def test_parse_fmp_response_empty():
     """parse_fmp_response liste vide → None."""
-    from scanner.fetcher import _parse_fmp_response, FMPRatiosTTM
+    from scanner.fetcher import FMPRatiosTTM, _parse_fmp_response
 
     assert _parse_fmp_response([], FMPRatiosTTM, "TEST") is None
 
@@ -746,6 +750,7 @@ def test_momentum_adj_higher_for_stable_trend():
     σ des deux séries bien au-dessus de VOLATILITY_FLOOR (0.05%) pour tester la logique réelle.
     """
     import numpy as np
+
     from scanner.scoring.momentum import calculate_momentum_metrics
 
     np.random.seed(42)
@@ -778,6 +783,7 @@ def test_momentum_adj_higher_for_stable_trend():
 def test_inverse_vol_weights_sum_100():
     """Somme des poids = 100% à 1e-9 près."""
     import numpy as np
+
     from scanner.scoring.engine import compute_inverse_vol_weights
 
     dates = pd.date_range("2024-01-01", periods=126, freq="B")
@@ -793,6 +799,7 @@ def test_inverse_vol_weights_sum_100():
 def test_inverse_vol_weights_low_vol_gets_more():
     """σ_A = moitié σ_B → weight_A ≈ 2× weight_B."""
     import numpy as np
+
     from scanner.scoring.engine import compute_inverse_vol_weights
 
     dates = pd.date_range("2024-01-01", periods=126, freq="B")
@@ -825,7 +832,8 @@ def test_market_gate_prudence_vix_high_spy_above_ema():
 @pytest.mark.asyncio
 async def test_notify_panic_html_escaping():
     """notify_panic : VIX avec décimale → message HTML valide, envoyé via send_message_safe."""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
+
     from scanner.notifier import notify_panic
 
     sent_messages = []
@@ -849,6 +857,7 @@ async def test_notify_panic_html_escaping():
 async def test_notify_fmp_unavailable_html():
     """notify_fmp_unavailable : message HTML envoyé, ≤ 4096 chars."""
     from unittest.mock import patch
+
     from scanner.notifier import notify_fmp_unavailable
 
     sent_messages = []
@@ -871,6 +880,7 @@ async def test_notify_fmp_unavailable_html():
 def test_momentum_adj_flat_price_uses_floor():
     """Prix constant → σ ≈ 0 → momentum_adj calculé avec VOLATILITY_FLOOR (pas None)."""
     import numpy as np
+
     from scanner.scoring.momentum import calculate_momentum_metrics
 
     prices = pd.DataFrame({"Close": np.full(252, 100.0)})

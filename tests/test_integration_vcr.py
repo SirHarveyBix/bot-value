@@ -1,12 +1,16 @@
-import sys
-import pytest
 import os
+import sys
+
+import httpx
 import pandas as pd
+import pytest
 from freezegun import freeze_time
-from scanner.fetcher import fetch_all_data, fetch_market_indices, FMPUnavailableError
+
+from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices
 from scanner.scoring.engine import stock_scoring_pipeline
 from scanner.storage import save_signals
 from scanner.universe import load_universe
+
 
 @pytest.mark.asyncio
 async def test_full_pipeline_vcr(tmp_path):
@@ -16,11 +20,13 @@ async def test_full_pipeline_vcr(tmp_path):
     min_universe_size patché à 1 car seulement 5 stocks mock.
     """
     from unittest.mock import patch
-    from scanner.config import CONFIG
-    import scanner.scoring.engine as engine_module
-    from scanner import fetcher as fetcher_module
-    import scanner.storage as storage_module
+
     import numpy as np
+
+    import scanner.scoring.engine as engine_module
+    import scanner.storage as storage_module
+    from scanner import fetcher as fetcher_module
+    from scanner.config import CONFIG
 
     patched_cfg = {
         **CONFIG,
@@ -103,6 +109,7 @@ async def test_fmp_budget_counter():
     7 endpoints × 30 tickers = 210 nominaux.
     """
     from unittest.mock import patch
+
     from scanner import fetcher as fetcher_module
 
     call_count = 0
@@ -142,7 +149,8 @@ async def test_full_pipeline_panic_regime():
     """
     VIX=40 → scan termine après notify_panic(), 0 rows dans signals.
     """
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
+
     import main as main_module
 
     panic_called = False
@@ -181,6 +189,7 @@ async def test_fmp_unavailable_abort():
     → notify_fmp_unavailable() appelé, scan avorté, 0 signaux.
     """
     from unittest.mock import patch
+
     from scanner import fetcher as fetcher_module
 
     fmp_unavailable_called = False
@@ -211,6 +220,7 @@ async def test_fmp_unavailable_abort():
 async def test_update_signal_returns_no_rows(tmp_path):
     """0 signaux éligibles → 0 mises à jour, pas d'erreur."""
     from unittest.mock import patch
+
     import scanner.storage as storage_module
     from scanner.storage import init_db, update_signal_returns
 
@@ -224,7 +234,8 @@ async def test_update_signal_returns_no_rows(tmp_path):
 async def test_update_signal_returns_negative(tmp_path):
     """Signal avec price_at_signal=100, prix actuel=80 → return_30d=-0.2."""
     import sqlite3
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
+
     import scanner.storage as storage_module
     from scanner.storage import init_db, update_signal_returns
 
@@ -269,8 +280,8 @@ async def test_update_signal_returns_negative(tmp_path):
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_missing_key():
     """Clé FMP absente → FMPUnavailableError immédiat."""
-    from unittest.mock import patch, AsyncMock
-    import httpx
+    from unittest.mock import AsyncMock, patch
+
     from scanner.fetcher import fetch_fmp_data
 
     cfg = {
@@ -286,8 +297,8 @@ async def test_fetch_fmp_data_missing_key():
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_success():
     """Réponses 200 complètes → dict correct (totalCash=None, sector, surprise_pct)."""
-    from unittest.mock import patch, MagicMock
-    import httpx
+    from unittest.mock import MagicMock, patch
+
     from scanner.fetcher import fetch_fmp_data
 
     def make_resp(data):
@@ -337,8 +348,8 @@ async def test_fetch_fmp_data_success():
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_5xx_raises():
     """5xx persistant → FMPUnavailableError après max_retries tentatives."""
-    from unittest.mock import patch, MagicMock
-    import httpx
+    from unittest.mock import MagicMock, patch
+
     from scanner.fetcher import fetch_fmp_data
 
     def make_resp_5xx():
@@ -376,9 +387,11 @@ async def test_first_seen_date_preserved_across_scans(tmp_path):
     """
     import sqlite3
     from unittest.mock import patch
+
     from freezegun import freeze_time
+
     import scanner.storage as storage_module
-    from scanner.storage import init_db, save_signals_to_db, get_first_seen_date, save_scanned_universe
+    from scanner.storage import get_first_seen_date, init_db, save_scanned_universe, save_signals_to_db
 
     db_file = str(tmp_path / "test_t052.db")
     scan_date_j = "2026-01-01"

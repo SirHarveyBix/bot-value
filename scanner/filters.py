@@ -29,17 +29,17 @@ def filter_post_scoring(df, all_data):
                 # 2. Data Freshness check
                 info = all_data.get(symbol, {}).get("info", {})
                 is_fresh, has_warning, warning_reason = data_freshness_check(info)
-                
+
                 if not is_fresh:
                     logger.warning(f"Ticker {symbol} exclu car données trop vieilles ({warning_reason})")
                     continue
-                
+
                 # 3. Earnings Calendar check (Section 5.2)
                 row_copy = row.copy()
                 earnings_date = earnings_calendar_check(symbol)
                 if earnings_date:
                     row_copy["earnings_date"] = earnings_date
-                
+
                 if has_warning:
                     row_copy["warning"] = warning_reason
 
@@ -70,7 +70,7 @@ def data_freshness_check(ticker_info):
 
     if age_days > max_age:
         return False, False, f"Données trop vieilles: {age_days} jours"
-    
+
     if age_days > warning_age:
         return True, True, f"Données potentiellement périmées ({age_days} j)"
 
@@ -118,7 +118,7 @@ def check_batch_data_ratio(price_data, eligible_count):
 
     ratio = valid_count / eligible_count
     min_ratio = CONFIG["scanner"].get("min_valid_data_ratio", 0.60)
-    
+
     if ratio < min_ratio:
         logger.error(f"Ratio de prix batch trop faible: {ratio:.2%} (min {min_ratio:.0%})")
         return False

@@ -1,22 +1,30 @@
 import argparse
 import asyncio
+import sqlite3 as _sqlite3
 from datetime import datetime
 
 import pandas_market_calendars as mcal
 from apscheduler import AsyncScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone
-import sqlite3 as _sqlite3
 
-from scanner.config import CONFIG, logger
 import scanner.fetcher as _fetcher
+from scanner.config import CONFIG, logger
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import notify, notify_panic
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
-from scanner.storage import save_scan_entry, save_signals, save_scanned_universe, update_signal_returns, DB_PATH, get_first_seen_date
+from scanner.storage import (
+    DB_PATH,
+    get_first_seen_date,
+    save_scan_entry,
+    save_scanned_universe,
+    save_signals,
+    update_signal_returns,
+)
 from scanner.universe import build_eligible_universe, load_universe
+
 
 def is_market_open():
     """Vérifie si le NYSE est ouvert aujourd'hui."""
