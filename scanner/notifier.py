@@ -1,10 +1,16 @@
 import asyncio
 import html
+import re
 from datetime import date, datetime
 
 from telegram import Bot
+from telegram.error import RetryAfter
 
 from scanner.config import CONFIG, logger
+
+_HTML_OPEN_TAG_RE = re.compile(r'<(\w+)[^>/]*>')
+_HTML_CLOSE_TAG_RE = re.compile(r'</(\w+)>')
+_TELEGRAM_INLINE_TAGS = frozenset(('b', 'i', 'u', 's', 'a', 'code', 'pre'))
 
 
 def escape_html(text):
@@ -20,6 +26,41 @@ def truncate_message(msg: str, max_chars: int = None) -> str:
         return msg
     suffix = "\n[message tronqué]"
     return msg[:max_chars - len(suffix)] + suffix
+
+
+def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
+    """Tronque à max_chars et ferme les balises HTML ouvertes (sécurité parse_mode HTML)."""
+    if max_chars is None:
+        max_chars = CONFIG["scanner"].get("telegram_max_chars", 4096)
+    if len(msg) <= max_chars:
+        return msg
+    suffix = "\n[message tronqué]"
+    truncated = msg[:max_chars - len(suffix)] + suffix
+    open_tags: list[str] = []
+    pos = 0
+    for m in re.finditer(r'<(/?)(\w+)[^>]*>', truncated):
+        tag = m.group(2).lower()
+        if tag not in _TELEGRAM_INLINE_TAGS:
+            continue
+        if m.group(1) == '/':
+            if open_tags and open_tags[-1] == tag:
+                open_tags.pop()
+        else:
+            open_tags.append(tag)
+    for tag in reversed(open_tags):
+        truncated += f'</{tag}>'
+    return truncated
+
+
+async def send_message_safe(bot: Bot, chat_id, text: str, **kwargs) -> None:
+    """Envoie un message Telegram en gérant RetryAfter (rate limit 429)."""
+    try:
+        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+    except RetryAfter as e:
+        wait = int(e.retry_after) + 1
+        logger.warning(f"Telegram RetryAfter {wait}s — pause avant réenvoi")
+        await asyncio.sleep(wait)
+        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 
 def _get_bot():
@@ -42,7 +83,7 @@ async def notify_panic(vix: float, spy: float, ema200: float):
         f"SPY : {spy:.2f} vs EMA200 : {ema200:.2f}\n"
         "<i>Aucun signal émis. Capital preservation prioritaire.</i>"
     )
-    await bot.send_message(chat_id=chat_id, text=truncate_message(msg), parse_mode="HTML")
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
 async def notify_fmp_unavailable():
@@ -56,7 +97,7 @@ async def notify_fmp_unavailable():
         "<i>Aucune clé API valide ou erreur 5xx persistante après 2 retries.\n"
         "Scan arrêté — aucun signal émis.</i>"
     )
-    await bot.send_message(chat_id=chat_id, text=truncate_message(msg), parse_mode="HTML")
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
 async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
@@ -69,6 +110,10 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         logger.warning("Notifications Telegram désactivées (token ou chat_id manquant).")
         return
 
+    # T073 — log JSON avant envoi (loguru serialize=True → signals_{date}.jsonl)
+    stock_symbols = [row["symbol"] for _, row in top_stocks.iterrows()]
+    logger.info(f"signals_dispatch regime={market_regime} stocks={stock_symbols} count={len(stock_symbols)}")
+
     # 1. Envoi du Header
     header = f"📊 <b>ValueMomentum Scanner — {datetime.now().strftime('%Y-%m-%d')}</b>\n"
 
@@ -76,7 +121,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         header += "⚠️ <b>RÉGIME DE PRUDENCE — SPY &lt; EMA200, VIX modéré</b>\n"
 
     header += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n🏆 <b>TOP ACTIONS DU JOUR</b>"
-    await bot.send_message(chat_id=chat_id, text=truncate_message(header), parse_mode="HTML")
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(header), parse_mode="HTML")
     await asyncio.sleep(1.5)
 
     # 2. Envoi des Stocks (un par un)
@@ -108,7 +153,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
 
         try:
-            await bot.send_message(chat_id=chat_id, text=truncate_message(msg), parse_mode="HTML", disable_web_page_preview=True)
+            await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML", disable_web_page_preview=True)
             await asyncio.sleep(1.5)
         except Exception as e:
             logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
@@ -116,7 +161,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
     # 3. Envoi des ETFs
     if not top_etfs.empty:
         etf_header = "━━━━━━━━━━━━━━━━━━━━━━━━━━\n📦 <b>TOP ETFs DU JOUR</b>"
-        await bot.send_message(chat_id=chat_id, text=truncate_message(etf_header), parse_mode="HTML")
+        await send_message_safe(bot, chat_id, truncate_message_html_safe(etf_header), parse_mode="HTML")
         await asyncio.sleep(1.5)
 
         for i, (_, row) in enumerate(top_etfs.iterrows()):
@@ -127,7 +172,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
             msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
 
             try:
-                await bot.send_message(chat_id=chat_id, text=truncate_message(msg), parse_mode="HTML", disable_web_page_preview=True)
+                await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML", disable_web_page_preview=True)
                 await asyncio.sleep(1.5)
             except Exception as e:
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")

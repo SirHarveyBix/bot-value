@@ -204,6 +204,11 @@ def stock_scoring_pipeline(all_data, symbols):
     )
     df["rank_peg"] = compute_percentile_ranks(df, "peg", ascending=False)
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
+    # v1.1 — rank sur momentum ajusté volatilité (fallback rank_perf_6m si momentum_adj absent)
+    if "momentum_adj" in df.columns and df["momentum_adj"].notna().any():
+        df["rank_momentum_adj"] = compute_percentile_ranks(df, "momentum_adj")
+    else:
+        df["rank_momentum_adj"] = df["rank_perf_6m"]
     df["rank_outperf_6m"] = compute_percentile_ranks(df, "outperf_6m")
     df["rank_perf_3m"] = compute_percentile_ranks(df, "perf_3m")
     df["rank_surprise"] = compute_percentile_ranks(df, "surprise_pct")
@@ -244,7 +249,7 @@ def stock_scoring_pipeline(all_data, symbols):
     def _row_momentum_score(row):
         w = compute_momentum_weights(row.get("surprise_date"), base_mw, today)
         return (
-            row.get("rank_perf_6m", 0) * w["perf_6m"] +
+            row.get("rank_momentum_adj", row.get("rank_perf_6m", 0)) * w["perf_6m"] +
             (row.get("rank_outperf_6m") or 0) * w["outperf_6m"] +
             (row.get("rank_perf_3m") or 0) * w["perf_3m"] +
             row.get("rank_surprise", 0) * w["surprise_earnings"] +
@@ -308,3 +313,37 @@ def etf_scoring_pipeline(all_data, etfs):
     )
 
     return df.sort_values("score_global", ascending=False)
+
+
+def compute_inverse_vol_weights(ranked_df: pd.DataFrame, all_data: dict) -> pd.DataFrame:
+    """
+    v1.1 — Pondération inverse de la volatilité pour les signaux Top 10.
+    Calcule suggested_weight_pct = (1/σ_i) / Σ(1/σ_j) × 100.
+    σ = écart-type des rendements journaliers sur 63j.
+    Tickers sans historique suffisant reçoivent le poids moyen.
+    """
+    symbols = list(ranked_df["symbol"])
+    inv_vols: dict[str, float] = {}
+
+    for sym in symbols:
+        prices = all_data.get(sym, {}).get("prices")
+        if prices is not None and len(prices) >= 63:
+            daily_ret = prices["Close"].iloc[-63:].pct_change().dropna()
+            sigma = float(daily_ret.std())
+            if sigma > 1e-9:
+                inv_vols[sym] = 1.0 / sigma
+
+    if not inv_vols:
+        ranked_df["suggested_weight_pct"] = 100.0 / len(symbols) if symbols else None
+        return ranked_df
+
+    mean_inv_vol = sum(inv_vols.values()) / len(inv_vols)
+    total_inv_vol = sum(inv_vols.get(s, mean_inv_vol) for s in symbols)
+
+    weights = {
+        s: (inv_vols.get(s, mean_inv_vol) / total_inv_vol) * 100.0
+        for s in symbols
+    }
+    ranked_df = ranked_df.copy()
+    ranked_df["suggested_weight_pct"] = ranked_df["symbol"].map(weights)
+    return ranked_df

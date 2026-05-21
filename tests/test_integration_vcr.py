@@ -30,7 +30,7 @@ async def test_full_pipeline_vcr(tmp_path):
 
     mock_info = {
         "longName": "Mock Corp", "sector": "Technology",
-        "marketCap": 5_000_000_000, "returnOnEquity": 0.20, "roe_ttm": 0.20, "roe_3y": 0.20,
+        "marketCap": 5_000_000_000, "roe_ttm": 0.20, "roe_3y": 0.20,
         "operatingMargins": 0.15, "totalDebt": 1e9, "totalCash": None, "netDebt": 5e8,
         "ebitda": 5e8, "freeCashflow": 3e8, "forwardPE": 20.0, "enterpriseToEbitda": 15.0,
         "pegRatio": 1.5, "surprise_pct": 0.05, "surprise_date": "2024-10-15",
@@ -192,8 +192,9 @@ async def test_fmp_unavailable_abort():
         with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_prices):
             with patch.object(fetcher_module, "notify_fmp_unavailable",
                               side_effect=mock_notify_fmp):
-                with pytest.raises(FMPUnavailableError):
-                    await fetch_all_data(["AAPL"], [], prices_batch=mock_prices)
+                with patch.object(fetcher_module.cache, "get", return_value=None):
+                    with pytest.raises(FMPUnavailableError):
+                        await fetch_all_data(["AAPL"], [], prices_batch=mock_prices)
 
     assert fmp_unavailable_called, "notify_fmp_unavailable() doit être appelé lors d'une FMPUnavailableError"
 
@@ -303,7 +304,7 @@ async def test_fetch_fmp_data_success():
         "analyst-estimates": make_resp([{"estimatedEpsAvg": 2.1}, {"estimatedEpsAvg": 2.0}]),
     }
 
-    async def mock_get(url):
+    async def mock_get(url, **kwargs):
         for key, resp in url_responses.items():
             if key in url:
                 return resp
@@ -337,9 +338,12 @@ async def test_fetch_fmp_data_5xx_raises():
         r = MagicMock()
         r.status_code = 503
         r.json.return_value = {}
+        r.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "503", request=MagicMock(), response=r
+        )
         return r
 
-    async def mock_get(url):
+    async def mock_get(url, **kwargs):
         return make_resp_5xx()
 
     mock_client = MagicMock(spec=httpx.AsyncClient)

@@ -19,6 +19,7 @@ def setup_logging():
     )
     logger.add(sys.stdout, format=format_str, level="INFO")
     logger.add("data/logs/scanner_{time:YYYY-MM-DD}.log", rotation="00:00", retention="30 days", level="DEBUG")
+    logger.add("data/logs/signals_{time:YYYY-MM-DD}.jsonl", serialize=True, rotation="00:00", retention="90 days", level="INFO")
 
 def load_config():
     """Charge la configuration YAML et injecte les variables d'env."""

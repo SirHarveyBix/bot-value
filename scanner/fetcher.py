@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import random
 from datetime import datetime
+from typing import Any, Optional
+
 import httpx
 import pandas as pd
 import yfinance as yf
+from pydantic import BaseModel, model_validator
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
@@ -25,6 +29,76 @@ SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "
 class FMPUnavailableError(Exception):
     """Levée quand FMP est inaccessible (clé absente ou 5xx après fmp_max_retries tentatives)."""
     pass
+
+
+class _FMPBase(BaseModel):
+    """Convertit les strings non-numériques en None avant validation (ex: 'N/A' → None)."""
+
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_invalid_to_none(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        cleaned: dict = {}
+        for k, v in data.items():
+            if isinstance(v, str):
+                try:
+                    cleaned[k] = float(v)
+                except (TypeError, ValueError):
+                    cleaned[k] = None
+            else:
+                cleaned[k] = v
+        return cleaned
+
+
+class FMPRatiosTTM(_FMPBase):
+    priceEarningsRatioTTM: Optional[float] = None
+    enterpriseValueOverEBITDATTM: Optional[float] = None
+    pegRatioTTM: Optional[float] = None
+    operatingProfitMarginTTM: Optional[float] = None
+    returnOnEquityTTM: Optional[float] = None
+
+
+class FMPKeyMetricsTTM(_FMPBase):
+    roicTTM: Optional[float] = None
+    netDebtTTM: Optional[float] = None
+    ebitdaTTM: Optional[float] = None
+    totalDebtTTM: Optional[float] = None
+    freeCashFlowTTM: Optional[float] = None
+
+
+def _parse_fmp_response(raw: list | dict, model_class: type[_FMPBase], ticker: str) -> Optional[_FMPBase]:
+    """Parse le premier élément d'une réponse FMP. Retourne None si invalide."""
+    if not raw:
+        return None
+    item = raw[0] if isinstance(raw, list) else raw
+    try:
+        return model_class(**item)
+    except Exception as e:
+        logger.warning(f"FMP parse error [{ticker}] {model_class.__name__}: {e}")
+        return None
+
+
+def _is_fmp_server_error(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, httpx.TimeoutException)
+
+
+@retry(
+    retry=retry_if_exception(_is_fmp_server_error),
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
+)
+async def _fmp_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """GET FMP avec retry automatique sur 5xx/timeout (tenacity, max 2 tentatives)."""
+    response = await client.get(url, timeout=10.0)
+    if response.status_code >= 500:
+        response.raise_for_status()
+    return response
 
 
 async def fetch_prices_batch(tickers, period="1y"):
@@ -85,13 +159,13 @@ async def fetch_prices_batch(tickers, period="1y"):
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
-    Lève FMPUnavailableError si clé absente ou 5xx persistant après fmp_max_retries.
+    Lève FMPUnavailableError si clé absente ou 5xx persistant (tenacity, 2 retries max).
     Respecte le disjoncteur global fmp_call_counter (hard limit 245 calls/run).
+    Valide les réponses via Pydantic — null/string invalide → None, pipeline non corrompu.
     """
     global fmp_call_counter
 
     budget_limit = CONFIG["scanner"].get("fmp_call_budget_hard_limit", 245)
-    # 7 endpoints par ticker — vérifier marge avant de commencer
     if fmp_call_counter + 7 > budget_limit:
         logger.warning(
             f"Budget FMP atteint ({fmp_call_counter} calls) — skip {symbol} "
@@ -105,101 +179,102 @@ async def fetch_fmp_data(client, symbol):
     if not api_key or api_key.startswith("${"):
         raise FMPUnavailableError("Clé FMP absente ou non configurée.")
 
-    max_retries = CONFIG["scanner"].get("fmp_max_retries", 2)
+    try:
+        responses = await asyncio.gather(
+            _fmp_get(client, f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/profile/{symbol}?apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/income-statement/{symbol}?limit=3&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/balance-sheet-statement/{symbol}?limit=3&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/earnings-surprises/{symbol}?apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/analyst-estimates/{symbol}?period=quarter&limit=3&apikey={api_key}"),
+        )
+        fmp_call_counter += 7  # comptabilisé après succès du gather
+    except httpx.HTTPStatusError as e:
+        raise FMPUnavailableError(f"FMP 5xx persistant après 2 tentatives pour {symbol}: {e}") from e
+    except FMPUnavailableError:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur réseau FMP pour {symbol}: {e}")
+        return None
 
-    for attempt in range(max_retries):
-        try:
-            fmp_call_counter += 7  # 7 endpoints par ticker
-            responses = await asyncio.gather(
-                client.get(f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}"),
-                client.get(f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}"),
-                client.get(f"{base_url}/profile/{symbol}?apikey={api_key}"),
-                client.get(f"{base_url}/income-statement/{symbol}?limit=3&apikey={api_key}"),
-                client.get(f"{base_url}/balance-sheet-statement/{symbol}?limit=3&apikey={api_key}"),
-                client.get(f"{base_url}/earnings-surprises/{symbol}?apikey={api_key}"),
-                client.get(f"{base_url}/analyst-estimates/{symbol}?period=quarter&limit=3&apikey={api_key}"),
-            )
+    try:
+        r_data = responses[0].json()
+        k_data = responses[1].json()
+        p_data = responses[2].json()
+        is_data = responses[3].json()
+        bs_data = responses[4].json()
+        s_data = responses[5].json()
+        a_data = responses[6].json()
 
-            if any(resp.status_code >= 500 for resp in responses):
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(random.uniform(0.8, 1.5))
-                    continue
-                raise FMPUnavailableError(f"FMP 5xx persistant après {max_retries} tentatives pour {symbol}.")
-
-            if all(resp.status_code == 200 for resp in responses):
-                r_data = responses[0].json()
-                k_data = responses[1].json()
-                p_data = responses[2].json()
-                is_data = responses[3].json()
-                bs_data = responses[4].json()
-                s_data = responses[5].json()
-                a_data = responses[6].json()
-
-                if r_data and k_data and p_data:
-                    r = r_data[0]
-                    k = k_data[0]
-                    p = p_data[0]
-
-                    surprise_pct = 0.0
-                    surprise_date = None
-                    if s_data and len(s_data) > 0:
-                        surprise_pct = s_data[0].get("surprisePercentage", 0) / 100.0
-                        surprise_date = s_data[0].get("date")
-
-                    analyst_revision_3m = compute_analyst_revision_3m(a_data) if a_data else None
-
-                    # Gap 2: date FMP → timestamp compatible data_freshness_check (filters.py)
-                    most_recent_quarter_ts = None
-                    if is_data and len(is_data) > 0:
-                        date_str = is_data[0].get("date")
-                        if date_str:
-                            try:
-                                most_recent_quarter_ts = datetime.fromisoformat(date_str).timestamp()
-                            except ValueError:
-                                pass
-
-                    roe_3y = None
-                    if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
-                        roes = []
-                        for i in range(min(3, len(is_data), len(bs_data))):
-                            ni = is_data[i].get("netIncome", 0)
-                            te = bs_data[i].get("totalStockholdersEquity", 1)
-                            if te and te > 0:
-                                roes.append(ni / te)
-                        if roes:
-                            roe_3y = sum(roes) / len(roes)
-
-                    return {
-                        "symbol": symbol,
-                        "longName": p.get("companyName"),
-                        "sector": p.get("sector"),
-                        "marketCap": p.get("mktCap"),
-                        "returnOnEquity": roe_3y,
-                        "roe_ttm": r.get("returnOnEquityTTM"),
-                        "roe_3y": roe_3y,
-                        "operatingMargins": r.get("operatingProfitMarginTTM"),
-                        "totalDebt": k.get("totalDebtTTM"),
-                        "totalCash": None,
-                        "netDebt": k.get("netDebtTTM"),
-                        "ebitda": k.get("ebitdaTTM"),
-                        "freeCashflow": k.get("freeCashFlowTTM"),
-                        "forwardPE": r.get("priceEarningsRatioTTM"),
-                        "enterpriseToEbitda": r.get("enterpriseValueOverEBITDATTM"),
-                        "pegRatio": r.get("pegRatioTTM"),
-                        "surprise_pct": surprise_pct,
-                        "surprise_date": surprise_date,
-                        "analyst_revision_3m": analyst_revision_3m,
-                        "mostRecentQuarter": most_recent_quarter_ts,
-                        "source": "FMP",
-                    }
-            return None
-        except FMPUnavailableError:
-            raise
-        except Exception as e:
-            logger.error(f"Erreur API FMP pour {symbol}: {e}")
+        if not (r_data and k_data and p_data):
             return None
 
-    return None
+        # Validation Pydantic — null/strings invalides → None (pas de crash percentile)
+        r = _parse_fmp_response(r_data, FMPRatiosTTM, symbol)
+        k = _parse_fmp_response(k_data, FMPKeyMetricsTTM, symbol)
+        if r is None or k is None:
+            logger.warning(f"FMP: réponse invalide pour {symbol} (ratios/key-metrics)")
+            return None
+
+        p = p_data[0]
+
+        surprise_pct = 0.0
+        surprise_date = None
+        if s_data and len(s_data) > 0:
+            surprise_pct = s_data[0].get("surprisePercentage", 0) / 100.0
+            surprise_date = s_data[0].get("date")
+
+        analyst_revision_3m = compute_analyst_revision_3m(a_data) if a_data else None
+
+        most_recent_quarter_ts = None
+        if is_data and len(is_data) > 0:
+            date_str = is_data[0].get("date")
+            if date_str:
+                try:
+                    most_recent_quarter_ts = datetime.fromisoformat(date_str).timestamp()
+                except ValueError:
+                    pass
+
+        roe_3y = None
+        if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
+            roes = []
+            for i in range(min(3, len(is_data), len(bs_data))):
+                ni = is_data[i].get("netIncome", 0)
+                te = bs_data[i].get("totalStockholdersEquity", 1)
+                if te and te > 0:
+                    roes.append(ni / te)
+            if roes:
+                roe_3y = sum(roes) / len(roes)
+
+        return {
+            "symbol": symbol,
+            "longName": p.get("companyName"),
+            "sector": p.get("sector"),
+            "marketCap": p.get("mktCap"),
+            "roe_ttm": r.returnOnEquityTTM,
+            "roe_3y": roe_3y,
+            "roicTTM": k.roicTTM,
+            "operatingMargins": r.operatingProfitMarginTTM,
+            "totalDebt": k.totalDebtTTM,
+            "totalCash": None,
+            "netDebt": k.netDebtTTM,
+            "ebitda": k.ebitdaTTM,
+            "freeCashflow": k.freeCashFlowTTM,
+            "forwardPE": r.priceEarningsRatioTTM,
+            "enterpriseToEbitda": r.enterpriseValueOverEBITDATTM,
+            "pegRatio": r.pegRatioTTM,
+            "surprise_pct": surprise_pct,
+            "surprise_date": surprise_date,
+            "analyst_revision_3m": analyst_revision_3m,
+            "mostRecentQuarter": most_recent_quarter_ts,
+            "source": "FMP",
+        }
+    except FMPUnavailableError:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur API FMP pour {symbol}: {e}")
+        return None
 
 async def fetch_ticker_info(symbol, client=None):
     """

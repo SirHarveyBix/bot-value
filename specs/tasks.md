@@ -236,28 +236,28 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 
 ### 9.1 Robustesse (priorité haute)
 
-- [ ] T068 Ajouter modèles Pydantic dans `scanner/fetcher.py` : `FMPRatiosTTM`, `FMPKeyMetricsTTM` (champs Optional[float], `extra="allow"`), `parse_fmp_response(raw, model_class, ticker)` → log warning + return None si parse error (§3bis.2.3 spec)
-- [ ] T069 [P] Remplacer retry manuel FMP par `@retry(tenacity)` dans `scanner/fetcher.py` : `stop_after_attempt(2)`, `wait_exponential(min=2, max=10)`, `retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException))` — aligné `FMP_MAX_RETRIES=2` (§13.1 spec)
-- [ ] T070 [P] Ajouter `aiosqlite>=0.19.0,<1.0.0` dans `requirements.txt` ; migrer `scanner/storage.py` : remplacer `sqlite3.connect()` par `async with aiosqlite.connect(db_path) as conn` pour requêtes lourdes (évite freeze Event Loop)
-- [ ] T071 [P] Remplacer `asyncio.sleep(1.5)` fixe par `send_message_safe()` dans `scanner/notifier.py` : catch `telegram.error.RetryAfter` → `asyncio.sleep(e.retry_after + 1)` (§6.6 spec)
-- [ ] T072 [P] Remplacer `truncate_message()` par `truncate_message_html_safe()` dans `scanner/notifier.py` : fermeture balises HTML ouvertes via regex avant coupure 4096 chars (§6.6 spec)
-- [ ] T073 Ajouter logging structuré JSON dans `scanner/notifier.py` : `logger.add("data/logs/signals_{time}.jsonl", serialize=True, rotation="1 day", retention="90 days")` + `logger.info(...)` sur chaque signal **avant** appel `send_message_safe()` (§6.6 spec)
+- [x] T068 Ajouter modèles Pydantic dans `scanner/fetcher.py` : `FMPRatiosTTM`, `FMPKeyMetricsTTM` (champs Optional[float], `extra="allow"`), `parse_fmp_response(raw, model_class, ticker)` → log warning + return None si parse error (§3bis.2.3 spec)
+- [x] T069 [P] Remplacer retry manuel FMP par `@retry(tenacity)` dans `scanner/fetcher.py` : `stop_after_attempt(2)`, `wait_exponential(min=2, max=10)`, `retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException))` — aligné `FMP_MAX_RETRIES=2` (§13.1 spec)
+- [x] T070 [P] Ajouter `aiosqlite>=0.19.0,<1.0.0` dans `requirements.txt` ; migrer `scanner/storage.py` : remplacer `sqlite3.connect()` par `async with aiosqlite.connect(db_path) as conn` pour requêtes lourdes (évite freeze Event Loop)
+- [x] T071 [P] Remplacer `asyncio.sleep(1.5)` fixe par `send_message_safe()` dans `scanner/notifier.py` : catch `telegram.error.RetryAfter` → `asyncio.sleep(e.retry_after + 1)` (§6.6 spec)
+- [x] T072 [P] Remplacer `truncate_message()` par `truncate_message_html_safe()` dans `scanner/notifier.py` : fermeture balises HTML ouvertes via regex avant coupure 4096 chars (§6.6 spec)
+- [x] T073 Ajouter logging structuré JSON dans `scanner/notifier.py` : `logger.add("data/logs/signals_{time}.jsonl", serialize=True, rotation="1 day", retention="90 days")` + `logger.info(...)` sur chaque signal **avant** appel `send_message_safe()` (§6.6 spec)
 
 **Checkpoint** : FMP null/string → ticker skippé, pipeline continue. 429 Telegram → Retry-After respecté. Logs JSON dans `data/logs/signals_*.jsonl` avant envoi.
 
 ### 9.2 Améliorations scoring
 
-- [ ] T074 [P] [US1] Ajouter ROIC composite dans `scanner/scoring/quality.py` : extraire `roicTTM` depuis `key-metrics-ttm` (endpoint déjà appelé — 0 call FMP supplémentaire), composite `roe_composite = 0.6 × roe_3y + 0.4 × roicTTM`, remplacer `roe_3y` seul dans le calcul percentile Qualité (§4.1 spec)
-- [ ] T075 [P] [US1] Remplacer `perf_6m` brut par momentum ajusté volatilité dans `scanner/scoring/momentum.py` : `stddev_6m = returns_daily.tail(126).std()`, `momentum_adj = return_6m / stddev_6m if stddev_6m > 0 else 0.0`, utiliser `momentum_adj` à la place de `perf_6m` dans le percentile rank (§4.1 Pilier 3 spec)
-- [ ] T076 [US1] Implémenter `compute_inverse_vol_weights(tickers, price_data) -> dict[str, float]` dans `scanner/scoring/engine.py` : σ sur 60j, `weight = (1/σ) / Σ(1/σ)`, retourne `{ticker: pct}` ; ajouter colonne `suggested_weight_pct REAL` à la table `signals` dans `scanner/storage.py` (§5.5 spec)
+- [x] T074 [P] [US1] Ajouter ROIC composite dans `scanner/scoring/quality.py` : extraire `roicTTM` depuis `key-metrics-ttm` (endpoint déjà appelé — 0 call FMP supplémentaire), composite `roe_composite = 0.6 × roe_3y + 0.4 × roicTTM`, remplacer `roe_3y` seul dans le calcul percentile Qualité (§4.1 spec)
+- [x] T075 [P] [US1] Remplacer `perf_6m` brut par momentum ajusté volatilité dans `scanner/scoring/momentum.py` : `stddev_6m = returns_daily.tail(126).std()`, `momentum_adj = return_6m / stddev_6m if stddev_6m > 0 else 0.0`, utiliser `momentum_adj` à la place de `perf_6m` dans le percentile rank (§4.1 Pilier 3 spec)
+- [x] T076 [US1] Implémenter `compute_inverse_vol_weights(tickers, price_data) -> dict[str, float]` dans `scanner/scoring/engine.py` : σ sur 60j, `weight = (1/σ) / Σ(1/σ)`, retourne `{ticker: pct}` ; ajouter colonne `suggested_weight_pct REAL` à la table `signals` dans `scanner/storage.py` (§5.5 spec)
 
 **Checkpoint** : ROIC disponible sur AAPL/MSFT (non-None). `momentum_adj` diffère de `perf_6m` pour tickers haute volatilité. `suggested_weight_pct` somme = 100% sur le Top 10.
 
 ### 9.3 Tests v1.1
 
-- [ ] T077 [P] Test Pydantic dans `tests/test_logic.py` : `parse_fmp_response({"peRatioTTM": "N/A"}, FMPRatiosTTM, "TEST")` → `peRatioTTM=None`, pipeline continue ; `parse_fmp_response([], FMPRatiosTTM, "TEST")` → `None`
-- [ ] T078 [P] Test momentum ajusté dans `tests/test_logic.py` : fixture prix synthétique tendance régulière vs parabole volatile → `momentum_adj` plus élevé pour la tendance régulière (même `return_6m`, σ différents)
-- [ ] T079 [P] Test inverse vol dans `tests/test_logic.py` : 2 tickers σ=0.01 et σ=0.02 → poids ticker σ=0.01 = 2× poids ticker σ=0.02 ; somme des poids = 100%
+- [x] T077 [P] Test Pydantic dans `tests/test_logic.py` : `parse_fmp_response({"peRatioTTM": "N/A"}, FMPRatiosTTM, "TEST")` → `peRatioTTM=None`, pipeline continue ; `parse_fmp_response([], FMPRatiosTTM, "TEST")` → `None`
+- [x] T078 [P] Test momentum ajusté dans `tests/test_logic.py` : fixture prix synthétique tendance régulière vs parabole volatile → `momentum_adj` plus élevé pour la tendance régulière (même `return_6m`, σ différents)
+- [x] T079 [P] Test inverse vol dans `tests/test_logic.py` : 2 tickers σ=0.01 et σ=0.02 → poids ticker σ=0.01 = 2× poids ticker σ=0.02 ; somme des poids = 100%
 
 **Checkpoint** : 3 tests passent en isolation (données statiques, 0 appel API).
 

@@ -24,23 +24,22 @@ def test_quality_logic():
     info = {
         "roe_3y": 0.20,           # champ FMP — Règle d'Or
         "operatingMargins": 0.15,
-        "totalDebt": 100,
-        "totalCash": 50,
+        "netDebt": 50,            # FMP fournit netDebt directement (totalCash=None dans FMP)
         "ebitda": 25,
         "freeCashflow": 10,
         "marketCap": 100
     }
     metrics = calculate_quality_metrics(info)
     assert metrics["roe"] == 0.20
-    assert metrics["debt_ebitda"] == 2.0  # (100-50)/25
+    assert metrics["debt_ebitda"] == 2.0  # netDebt/ebitda = 50/25
     assert metrics["fcf_yield"] == 0.1
     assert metrics["ebitda"] == 25
 
-    # Gate: ROE absent (yfinance uniquement, pas de roe_3y FMP) → exclu
+    # Gate: roe_3y absent → roe=None → exclu (champ returnOnEquity yfinance ignoré)
     info_no_roe = {k: v for k, v in info.items() if k != "roe_3y"}
-    info_no_roe["returnOnEquity"] = 0.20  # TTM yfinance — doit être ignoré
+    info_no_roe["returnOnEquity"] = 0.20  # yfinance TTM — non lu par calculate_quality_metrics
     metrics_no_roe = calculate_quality_metrics(info_no_roe)
-    assert metrics_no_roe["roe"] is None, "ROE TTM ne doit pas être utilisé (Règle d'Or)"
+    assert metrics_no_roe["roe"] is None, "roe_3y absent → roe=None (TTM non utilisé)"
     ok_no_roe, reason_no_roe, _ = apply_quality_gates(metrics_no_roe)
     assert not ok_no_roe
     assert "ROE 3 ans indisponible" in reason_no_roe
@@ -714,3 +713,99 @@ def test_is_market_open_weekend():
     """Dimanche 2026-05-17 → NYSE fermé."""
     from main import is_market_open
     assert not is_market_open()
+
+
+# ── v1.1 T077 — Pydantic FMP validation ──────────────────────────────────────
+
+def test_parse_fmp_response_invalid_string():
+    """parse_fmp_response avec string 'N/A' → champ = None, pas de crash."""
+    from scanner.fetcher import _parse_fmp_response, FMPRatiosTTM
+
+    result = _parse_fmp_response(
+        [{"priceEarningsRatioTTM": "N/A", "returnOnEquityTTM": 0.15}],
+        FMPRatiosTTM,
+        "TEST"
+    )
+    assert result is not None
+    assert result.priceEarningsRatioTTM is None
+    assert abs(result.returnOnEquityTTM - 0.15) < 1e-9
+
+
+def test_parse_fmp_response_empty():
+    """parse_fmp_response liste vide → None."""
+    from scanner.fetcher import _parse_fmp_response, FMPRatiosTTM
+
+    assert _parse_fmp_response([], FMPRatiosTTM, "TEST") is None
+
+
+# ── v1.1 T078 — Momentum volatility-adjusted ─────────────────────────────────
+
+def test_momentum_adj_higher_for_stable_trend():
+    """
+    Même return_6m, σ plus faible → momentum_adj plus élevé.
+    Série linéaire (stable) vs série parabolique (volatile fin de période).
+    """
+    import numpy as np
+    from scanner.scoring.momentum import calculate_momentum_metrics
+
+    dates = pd.date_range("2024-01-01", periods=252, freq="B")
+
+    # Série 1 : progression linéaire régulière (σ faible)
+    prices_linear = pd.DataFrame(
+        {"Close": np.linspace(100, 130, 252)}, index=dates
+    )
+
+    # Série 2 : flat puis spike final (σ élevé, même return_6m ≈ +30%)
+    flat = np.full(126, 100.0)
+    spike = np.linspace(100, 130, 126)
+    prices_volatile = pd.DataFrame(
+        {"Close": np.concatenate([flat, spike])}, index=dates
+    )
+
+    m_linear = calculate_momentum_metrics(prices_linear, {})
+    m_volatile = calculate_momentum_metrics(prices_volatile, {})
+
+    assert m_linear["momentum_adj"] is not None
+    assert m_volatile["momentum_adj"] is not None
+    # Même return_6m approximatif (~30%), σ linéaire < σ volatile → adj_linéaire > adj_volatile
+    assert m_linear["momentum_adj"] > m_volatile["momentum_adj"]
+
+
+# ── v1.1 T079 — Inverse volatility weights ───────────────────────────────────
+
+def test_inverse_vol_weights_sum_100():
+    """Somme des poids = 100% à 1e-9 près."""
+    import numpy as np
+    from scanner.scoring.engine import compute_inverse_vol_weights
+
+    dates = pd.date_range("2024-01-01", periods=126, freq="B")
+    ranked_df = pd.DataFrame({"symbol": ["A", "B"]})
+    all_data = {
+        "A": {"prices": pd.DataFrame({"Close": np.linspace(100, 110, 126)}, index=dates)},
+        "B": {"prices": pd.DataFrame({"Close": np.linspace(100, 130, 126)}, index=dates)},
+    }
+    result = compute_inverse_vol_weights(ranked_df, all_data)
+    assert abs(result["suggested_weight_pct"].sum() - 100.0) < 1e-6
+
+
+def test_inverse_vol_weights_low_vol_gets_more():
+    """σ_A = moitié σ_B → weight_A ≈ 2× weight_B."""
+    import numpy as np
+    from scanner.scoring.engine import compute_inverse_vol_weights
+
+    dates = pd.date_range("2024-01-01", periods=126, freq="B")
+    # Série A : très stable (σ ≈ 0.001), série B : volatile (σ ≈ 0.002)
+    np.random.seed(42)
+    prices_a = 100.0 + np.cumsum(np.random.normal(0, 0.1, 126))
+    prices_b = 100.0 + np.cumsum(np.random.normal(0, 0.2, 126))
+
+    ranked_df = pd.DataFrame({"symbol": ["A", "B"]})
+    all_data = {
+        "A": {"prices": pd.DataFrame({"Close": prices_a}, index=dates)},
+        "B": {"prices": pd.DataFrame({"Close": prices_b}, index=dates)},
+    }
+    result = compute_inverse_vol_weights(ranked_df, all_data)
+    w_a = result.loc[result["symbol"] == "A", "suggested_weight_pct"].iloc[0]
+    w_b = result.loc[result["symbol"] == "B", "suggested_weight_pct"].iloc[0]
+    # A moins volatile → poids plus élevé
+    assert w_a > w_b

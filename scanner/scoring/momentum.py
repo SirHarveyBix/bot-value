@@ -45,6 +45,14 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
         perf_3m = (p_now - close.iloc[-63]) / close.iloc[-63] if len(close) >= 63 else None
         perf_1m = (p_now - close.iloc[-21]) / close.iloc[-21] if len(close) >= 21 else None
 
+        # v1.1 — Momentum ajusté volatilité : return_6m / σ_daily_6M (Daniel & Moskowitz 2016)
+        momentum_adj = None
+        if perf_6m is not None and len(close) >= 126:
+            daily_returns = close.iloc[-126:].pct_change().dropna()
+            sigma_6m = float(daily_returns.std())
+            if sigma_6m > 1e-9:
+                momentum_adj = perf_6m / sigma_6m
+
         # Surperf sectorielle
         outperf_6m = None
         if sector_prices_df is not None and len(sector_prices_df) >= 126:
@@ -60,6 +68,7 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
             "perf_6m": perf_6m,
             "perf_3m": perf_3m,
             "perf_1m": perf_1m,
+            "momentum_adj": momentum_adj,
             "outperf_6m": outperf_6m,
             "surprise_pct": surprise_pct
         }

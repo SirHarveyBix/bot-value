@@ -8,7 +8,12 @@ def calculate_quality_metrics(ticker_info):
     try:
         # Section 4.1: ROE 3 ans obligatoire — TTM proscrit par la spec
         roe_3y = ticker_info.get("roe_3y")
-        roe_used = roe_3y  # None si FMP n'a pas fourni le calcul 3 ans → exclu dans apply_quality_gates
+        roic_ttm = ticker_info.get("roicTTM")
+        # v1.1 composite : 0.6 × ROE_3y + 0.4 × ROIC_TTM (0 appel FMP supplémentaire)
+        if roe_3y is not None and roic_ttm is not None:
+            roe_used = 0.6 * roe_3y + 0.4 * roic_ttm
+        else:
+            roe_used = roe_3y  # fallback v1.0 — None → exclu dans apply_quality_gates
 
         margin = ticker_info.get("operatingMargins")
         sector = ticker_info.get("sector")
@@ -17,19 +22,13 @@ def calculate_quality_metrics(ticker_info):
         # (levier structurel réglementé — ratio sans sens comparatif pour ces secteurs)
         exclude_debt = sector in ["Financials", "Real Estate", "Utilities"]
 
-        total_debt = ticker_info.get("totalDebt")
-        total_cash = ticker_info.get("totalCash")
-        net_debt = ticker_info.get("netDebt") # FMP fournit souvent netDebt directement
+        net_debt = ticker_info.get("netDebt")
         ebitda = ticker_info.get("ebitda")
 
         debt_ebitda = None
         if not exclude_debt:
-            # Calcul via Net Debt direct (FMP)
             if net_debt is not None and ebitda and ebitda > 0:
                 debt_ebitda = net_debt / ebitda
-            # Ou via Total Debt - Cash (yfinance)
-            elif total_debt is not None and total_cash is not None and ebitda and ebitda > 0:
-                debt_ebitda = (total_debt - total_cash) / ebitda
 
         # FCF Yield Proxy (Note: yfinance FCF data can be noisy/unreliable)
         fcf = ticker_info.get("freeCashflow")
@@ -37,10 +36,6 @@ def calculate_quality_metrics(ticker_info):
         fcf_yield = None
         if fcf is not None and mcap and mcap > 0:
             fcf_yield = fcf / mcap
-        elif ticker_info.get("operatingCashflow") and mcap and mcap > 0:
-            # Fallback sur l'Operating Cash Flow si le FCF est manquant
-            fcf_yield = ticker_info.get("operatingCashflow") / mcap
-            logger.debug(f"Utilisation de l'Operating Cashflow pour {ticker_info.get('symbol')} (FCF manquant)")
 
         return {
             "roe": roe_used,

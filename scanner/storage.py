@@ -4,7 +4,9 @@ import asyncio
 import sqlite3
 from datetime import datetime
 from scanner.config import logger
-
+import aiosqlite
+import yfinance as yf
+    
 DB_PATH = "data/signals/scanner_history.db"
 
 _NEW_COLS = [
@@ -15,6 +17,7 @@ _NEW_COLS = [
     "ALTER TABLE signals ADD COLUMN price_90d_later REAL",
     "ALTER TABLE signals ADD COLUMN return_90d REAL",
     "ALTER TABLE signals ADD COLUMN flags TEXT",
+    "ALTER TABLE signals ADD COLUMN suggested_weight_pct REAL",
 ]
 
 
@@ -220,59 +223,60 @@ async def update_signal_returns():
     Job de fond 18h00 ET : met à jour price_30d_later/return_30d et price_90d_later/return_90d.
     Utilise yfinance uniquement — aucun appel FMP.
     """
-    import yfinance as yf
+
 
     init_db()
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL;")
 
-    rows_30d = conn.execute(
-        "SELECT id, symbol, price_at_signal FROM signals "
-        "WHERE price_30d_later IS NULL AND price_at_signal IS NOT NULL "
-        "AND first_seen_date <= date('now', '-30 days')"
-    ).fetchall()
+        async with db.execute(
+            "SELECT id, symbol, price_at_signal FROM signals "
+            "WHERE price_30d_later IS NULL AND price_at_signal IS NOT NULL "
+            "AND first_seen_date <= date('now', '-30 days')"
+        ) as cur:
+            rows_30d = await cur.fetchall()
 
-    rows_90d = conn.execute(
-        "SELECT id, symbol, price_at_signal FROM signals "
-        "WHERE price_90d_later IS NULL AND price_at_signal IS NOT NULL "
-        "AND first_seen_date <= date('now', '-90 days')"
-    ).fetchall()
+        async with db.execute(
+            "SELECT id, symbol, price_at_signal FROM signals "
+            "WHERE price_90d_later IS NULL AND price_at_signal IS NOT NULL "
+            "AND first_seen_date <= date('now', '-90 days')"
+        ) as cur:
+            rows_90d = await cur.fetchall()
 
-    updated = 0
-    for row_id, symbol, price_at_signal in rows_30d:
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = await asyncio.to_thread(ticker.history, period="1d")
-            if hist.empty:
-                continue
-            price_now = float(hist["Close"].iloc[-1])
-            return_30d = (price_now - price_at_signal) / price_at_signal
-            conn.execute(
-                "UPDATE signals SET price_30d_later = ?, return_30d = ? WHERE id = ?",
-                (price_now, return_30d, row_id)
-            )
-            updated += 1
-        except Exception as e:
-            logger.warning(f"update_signal_returns 30d: erreur pour {symbol}: {e}")
+        updated = 0
+        for row_id, symbol, price_at_signal in rows_30d:
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = await asyncio.to_thread(ticker.history, period="1d")
+                if hist.empty:
+                    continue
+                price_now = float(hist["Close"].iloc[-1])
+                return_30d = (price_now - price_at_signal) / price_at_signal
+                await db.execute(
+                    "UPDATE signals SET price_30d_later = ?, return_30d = ? WHERE id = ?",
+                    (price_now, return_30d, row_id)
+                )
+                updated += 1
+            except Exception as e:
+                logger.warning(f"update_signal_returns 30d: erreur pour {symbol}: {e}")
 
-    for row_id, symbol, price_at_signal in rows_90d:
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = await asyncio.to_thread(ticker.history, period="1d")
-            if hist.empty:
-                continue
-            price_now = float(hist["Close"].iloc[-1])
-            return_90d = (price_now - price_at_signal) / price_at_signal
-            conn.execute(
-                "UPDATE signals SET price_90d_later = ?, return_90d = ? WHERE id = ?",
-                (price_now, return_90d, row_id)
-            )
-            updated += 1
-        except Exception as e:
-            logger.warning(f"update_signal_returns 90d: erreur pour {symbol}: {e}")
+        for row_id, symbol, price_at_signal in rows_90d:
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = await asyncio.to_thread(ticker.history, period="1d")
+                if hist.empty:
+                    continue
+                price_now = float(hist["Close"].iloc[-1])
+                return_90d = (price_now - price_at_signal) / price_at_signal
+                await db.execute(
+                    "UPDATE signals SET price_90d_later = ?, return_90d = ? WHERE id = ?",
+                    (price_now, return_90d, row_id)
+                )
+                updated += 1
+            except Exception as e:
+                logger.warning(f"update_signal_returns 90d: erreur pour {symbol}: {e}")
 
-    conn.commit()
-    conn.close()
+        await db.commit()
     logger.info(f"Retours 30j/90j mis à jour ({updated} mises à jour sur {len(rows_30d)+len(rows_90d)} signaux).")
 
 
