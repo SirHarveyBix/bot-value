@@ -112,12 +112,12 @@ async def test_full_pipeline_vcr(tmp_path):
                         assert (ranked_df["score_global"] <= 100).all(), "score_global > 100 détecté"
 
 
-# T042 — Budget FMP ≤ 250 calls pour 30 tickers
+# T042 — Budget FMP ≤ 175 calls pour 30 tickers (API stable : 5 endpoints/ticker)
 @pytest.mark.asyncio
 async def test_fmp_budget_counter():
     """
-    Mock 30 tickers Sniper → total appels FMP mockés ≤ 250.
-    7 endpoints × 30 tickers = 210 nominaux.
+    Mock 30 tickers Sniper → total appels FMP mockés ≤ 175.
+    5 endpoints × 30 tickers = 150 nominaux (API stable FMP, v3 dépréciée août 2025).
     """
     from unittest.mock import patch
 
@@ -130,7 +130,6 @@ async def test_fmp_budget_counter():
         "longName": "Test Corp",
         "sector": "Technology",
         "marketCap": 5_000_000_000,
-        "returnOnEquity": 0.2,
         "roe_ttm": 0.2,
         "roe_3y": 0.2,
         "operatingMargins": 0.15,
@@ -150,7 +149,7 @@ async def test_fmp_budget_counter():
 
     async def mock_fetch_ticker(symbol, client=None):
         nonlocal call_count
-        call_count += 7  # 7 endpoints par ticker
+        call_count += 5  # 5 endpoints par ticker (stable API)
         return mock_info
 
     universe = load_universe()
@@ -164,7 +163,7 @@ async def test_fmp_budget_counter():
             except Exception:
                 pass
 
-    assert call_count <= 245, f"Budget FMP dépassé: {call_count} calls > 245 (SC-001)"
+    assert call_count <= 175, f"Budget FMP dépassé: {call_count} calls > 175 (SC-001)"
 
 
 # T043 — Pipeline panic : VIX=40 → 0 signaux, notify_panic appelé
@@ -377,7 +376,13 @@ async def test_fetch_fmp_data_missing_key():
 
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_success():
-    """Réponses 200 complètes → dict correct (totalCash=None, sector, surprise_pct)."""
+    """
+    Réponses 200 complètes → dict correct avec API stable FMP.
+    - 5 endpoints (earnings-surprises 404, analyst-estimates 402 non appelés)
+    - Nouveaux field names stable : priceToEarningsRatioTTM, returnOnEquityTTM en key-metrics, etc.
+    - freeCashflow = freeCashFlowYieldTTM × marketCap
+    - surprise_pct = 0.0 (endpoint indisponible sur plan gratuit)
+    """
     from unittest.mock import MagicMock, patch
 
     from scanner.fetcher import fetch_fmp_data
@@ -388,33 +393,33 @@ async def test_fetch_fmp_data_success():
         r.json.return_value = data
         return r
 
+    # API stable : ratios-ttm retourne un dict (pas une liste)
     url_responses = {
         "ratios-ttm": make_resp(
-            [
-                {
-                    "returnOnEquityTTM": 0.20,
-                    "operatingProfitMarginTTM": 0.15,
-                    "priceEarningsRatioTTM": 20.0,
-                    "enterpriseValueOverEBITDATTM": 15.0,
-                    "pegRatioTTM": 1.5,
-                }
-            ]
+            {
+                "priceToEarningsRatioTTM": 20.0,
+                "enterpriseValueMultipleTTM": 15.0,
+                "priceToEarningsGrowthRatioTTM": 1.5,
+                "operatingProfitMarginTTM": 0.15,
+                "bookValuePerShareTTM": 25.0,
+            }
         ),
         "key-metrics-ttm": make_resp(
             [
                 {
-                    "totalDebtTTM": 1e9,
-                    "netDebtTTM": 5e8,
-                    "ebitdaTTM": 5e8,
-                    "freeCashFlowTTM": 3e8,
+                    "returnOnEquityTTM": 0.20,
+                    "returnOnInvestedCapitalTTM": 0.15,
+                    "freeCashFlowYieldTTM": 0.05,
                 }
             ]
         ),
-        "profile": make_resp([{"companyName": "Apple", "sector": "Technology", "mktCap": 3e12}]),
-        "income-statement": make_resp([{"date": "2024-09-30", "netIncome": 1e9}]),
-        "balance-sheet-statement": make_resp([{"totalStockholdersEquity": 5e9}]),
-        "earnings-surprises": make_resp([{"surprisePercentage": 5.0, "date": "2024-10-30"}]),
-        "analyst-estimates": make_resp([{"estimatedEpsAvg": 2.1}, {"estimatedEpsAvg": 2.0}]),
+        "profile": make_resp([{"companyName": "Apple", "sector": "Technology", "marketCap": 3e12}]),
+        "income-statement": make_resp(
+            [{"date": "2025-09-30", "netIncome": 1e9, "ebitda": 5e8}]
+        ),
+        "balance-sheet-statement": make_resp(
+            [{"totalStockholdersEquity": 5e9, "netDebt": 5e8, "totalDebt": 1e9}]
+        ),
     }
 
     async def mock_get(url, **kwargs):
@@ -436,8 +441,16 @@ async def test_fetch_fmp_data_success():
     assert result is not None
     assert result["sector"] == "Technology"
     assert result["totalCash"] is None
-    assert abs(result["surprise_pct"] - 0.05) < 1e-9
+    assert result["surprise_pct"] == 0.0  # endpoint indisponible plan gratuit
+    assert result["analyst_revision_3m"] is None
     assert result["source"] == "FMP"
+    assert abs(result["forwardPE"] - 20.0) < 1e-9
+    assert abs(result["roe_ttm"] - 0.20) < 1e-9
+    # freeCashflow = freeCashFlowYieldTTM (0.05) × mktCap (3e12) = 1.5e11
+    assert abs(result["freeCashflow"] - 0.05 * 3e12) < 1.0
+    assert abs(result["ebitda"] - 5e8) < 1.0
+    assert abs(result["netDebt"] - 5e8) < 1.0
+    assert abs(result["bookValuePerShare"] - 25.0) < 1e-9
 
 
 @pytest.mark.asyncio
