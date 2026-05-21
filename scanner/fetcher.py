@@ -28,6 +28,7 @@ SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "
 
 class FMPUnavailableError(Exception):
     """Levée quand FMP est inaccessible (clé absente ou 5xx après fmp_max_retries tentatives)."""
+
     pass
 
 
@@ -113,7 +114,7 @@ async def fetch_prices_batch(tickers, period="1y"):
     chunk_size = CONFIG["scanner"].get("yfinance_chunk_size", 100)
     chunk_delay = CONFIG["scanner"].get("yfinance_chunk_delay_s", 2.0)
     min_valid_ratio = CONFIG["scanner"].get("min_valid_data_ratio", 0.60)
-    chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
+    chunks = [tickers[i : i + chunk_size] for i in range(0, len(tickers), chunk_size)]
 
     logger.info(f"Téléchargement des prix pour {len(tickers)} tickers en {len(chunks)} chunk(s) de {chunk_size}...")
 
@@ -136,11 +137,14 @@ async def fetch_prices_batch(tickers, period="1y"):
             )
             if not data.empty:
                 valid_count = sum(
-                    1 for s in chunk
+                    1
+                    for s in chunk
                     if isinstance(data.columns, pd.MultiIndex) and s in data.columns.get_level_values(0)
                 )
                 if valid_count / len(chunk) < min_valid_ratio:
-                    logger.warning(f"Chunk {idx + 1}/{len(chunks)} : batch_partial_failure ({valid_count}/{len(chunk)} valides)")
+                    logger.warning(
+                        f"Chunk {idx + 1}/{len(chunks)} : batch_partial_failure ({valid_count}/{len(chunk)} valides)"
+                    )
                     failed_chunks += 1
                 all_frames.append(data)
         except Exception as e:
@@ -159,6 +163,7 @@ async def fetch_prices_batch(tickers, period="1y"):
 
     return pd.concat(all_frames, axis=1) if len(all_frames) > 1 else all_frames[0]
 
+
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
@@ -171,8 +176,7 @@ async def fetch_fmp_data(client, symbol):
     budget_limit = CONFIG["scanner"].get("fmp_call_budget_hard_limit", 245)
     if fmp_call_counter + 7 > budget_limit:
         logger.warning(
-            f"Budget FMP atteint ({fmp_call_counter} calls) — skip {symbol} "
-            f"(disjoncteur {budget_limit} calls)"
+            f"Budget FMP atteint ({fmp_call_counter} calls) — skip {symbol} (disjoncteur {budget_limit} calls)"
         )
         return None
 
@@ -279,6 +283,7 @@ async def fetch_fmp_data(client, symbol):
         logger.error(f"Erreur API FMP pour {symbol}: {e}")
         return None
 
+
 async def fetch_ticker_info(symbol, client=None):
     """
     Récupère les informations d'un ticker avec cache.
@@ -296,21 +301,19 @@ async def fetch_ticker_info(symbol, client=None):
         cache.set("fundamentals", symbol, info)
     return info
 
+
 async def fetch_market_indices():
     """Récupère l'historique du SPY et du VIX pour le Market Gate."""
     logger.info("Récupération du SPY et du VIX pour le Market Gate...")
     try:
         indices = await asyncio.to_thread(
-            yf.download,
-            tickers="SPY ^VIX",
-            period="2y",
-            progress=False,
-            auto_adjust=True
+            yf.download, tickers="SPY ^VIX", period="2y", progress=False, auto_adjust=True
         )
         return indices
     except Exception as e:
         logger.error(f"Erreur fetch indices marché: {e}")
         return pd.DataFrame()
+
 
 async def fetch_all_data(tickers, etfs=None, prices_batch=None):
     """
@@ -340,10 +343,7 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
                     if symbol in prices_batch.columns.levels[0]:
                         prices = prices_batch[symbol]
 
-                results[symbol] = {
-                    "info": info,
-                    "prices": prices
-                }
+                results[symbol] = {"info": info, "prices": prices}
     except FMPUnavailableError:
         await notify_fmp_unavailable()
         raise
@@ -354,9 +354,6 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
             if s_etf in prices_batch.columns.levels[0]:
                 prices = prices_batch[s_etf]
 
-        results[s_etf] = {
-            "info": {},
-            "prices": prices
-        }
+        results[s_etf] = {"info": {}, "prices": prices}
 
     return results

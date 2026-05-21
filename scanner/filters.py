@@ -50,6 +50,7 @@ def filter_post_scoring(df, all_data):
 
     return pd.DataFrame(final_top_10)
 
+
 def data_freshness_check(ticker_info):
     """
     Vérifie la fraîcheur des données fondamentales (Section 5.1).
@@ -75,6 +76,7 @@ def data_freshness_check(ticker_info):
         return True, True, f"Données potentiellement périmées ({age_days} j)"
 
     return True, False, None
+
 
 def earnings_calendar_check(symbol):
     """
@@ -104,6 +106,7 @@ def earnings_calendar_check(symbol):
         logger.debug(f"Erreur earnings calendar pour {symbol}: {e}")
         return None
 
+
 def check_batch_data_ratio(price_data, eligible_count):
     """
     Vérifie si le téléchargement par lot (Chalutier) a récupéré assez de données.
@@ -124,6 +127,7 @@ def check_batch_data_ratio(price_data, eligible_count):
         return False
     return True
 
+
 def check_data_ratio(all_data, eligible_count):
     """
     Vérifie si on a assez de données valides pour produire un rapport.
@@ -139,4 +143,3 @@ def check_data_ratio(all_data, eligible_count):
         logger.error(f"Ratio de données valides trop faible: {ratio:.2%} (min {min_ratio:.0%})")
         return False
     return True
-

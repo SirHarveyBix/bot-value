@@ -33,6 +33,7 @@ def is_market_open():
     schedule = nyse.schedule(start_date=today, end_date=today)
     return not schedule.empty
 
+
 async def run_scanner(force=False):
     """Fonction principale du job de scan (asynchrone)."""
     logger.info("Déclenchement du scan quotidien...")
@@ -61,7 +62,9 @@ async def run_scanner(force=False):
             current_vix = vix_close.iloc[-1].item()
 
             regime = evaluate_market_regime(current_vix, current_spy, ema200)
-            logger.info(f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}")
+            logger.info(
+                f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}"
+            )
 
         market_regime = regime.value
 
@@ -131,12 +134,7 @@ async def run_scanner(force=False):
         await save_scanned_universe(momentum_ranked_df, shortlist_stocks, top10_symbols, scan_date=scan_date_str)
 
         # 8. Storage
-        market_data = {
-            "regime": market_regime,
-            "spy_price": current_spy,
-            "spy_ema200": ema200,
-            "vix": current_vix
-        }
+        market_data = {"regime": market_regime, "spy_price": current_spy, "spy_ema200": ema200, "vix": current_vix}
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
         # Gap 1: enrichir top_10_stocks avec first_seen_date depuis SQLite avant notify
@@ -164,6 +162,7 @@ async def run_scanner(force=False):
     except Exception as e:
         logger.exception(f"Erreur critique lors du scan: {e}")
 
+
 async def main():
     parser = argparse.ArgumentParser(description="ValueMomentum Scanner")
     parser.add_argument("--force", action="store_true", help="Force le scan même si le marché est fermé")
@@ -182,21 +181,20 @@ async def main():
 
         # Job principal : scan quotidien 09h35 ET
         await scheduler.add_schedule(
-            run_scanner,
-            trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=35, timezone=tz),
-            id="daily_scan"
+            run_scanner, trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=35, timezone=tz), id="daily_scan"
         )
 
         # T028: Job secondaire : mise à jour retours 18h00 ET (Lacune 11)
         await scheduler.add_schedule(
             update_signal_returns,
             trigger=CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone=tz),
-            id="update_returns"
+            id="update_returns",
         )
 
         logger.info("Scheduler configuré : scan 09h35 ET + retours 18h00 ET, lundi-vendredi.")
 
         await scheduler.run_until_stopped()
+
 
 if __name__ == "__main__":
     try:

@@ -37,16 +37,11 @@ def calculate_quality_metrics(ticker_info):
         if fcf is not None and mcap and mcap > 0:
             fcf_yield = fcf / mcap
 
-        return {
-            "roe": roe_used,
-            "margin": margin,
-            "debt_ebitda": debt_ebitda,
-            "fcf_yield": fcf_yield,
-            "ebitda": ebitda
-        }
+        return {"roe": roe_used, "margin": margin, "debt_ebitda": debt_ebitda, "fcf_yield": fcf_yield, "ebitda": ebitda}
     except Exception as e:
         logger.error(f"Erreur calcul métriques qualité: {e}")
         return {}
+
 
 def apply_quality_gates(metrics, ticker_info=None):
     """

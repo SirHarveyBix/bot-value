@@ -13,5 +13,6 @@ def test_universe():
 
     logger.info(f"Test terminé. Éligibles: {eligible}")
 
+
 if __name__ == "__main__":
     test_universe()

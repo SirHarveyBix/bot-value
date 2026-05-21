@@ -21,17 +21,11 @@ def calculate_valuation_metrics(ticker_info):
                 pe_used = pe_ttm
                 pe_flag = "P/E TTM used as fallback"
 
-        return {
-            "pe": pe_used,
-            "ev_ebitda": ev_ebitda,
-            "peg": peg,
-            "sector": sector,
-            "mcap": mcap,
-            "pe_flag": pe_flag
-        }
+        return {"pe": pe_used, "ev_ebitda": ev_ebitda, "peg": peg, "sector": sector, "mcap": mcap, "pe_flag": pe_flag}
     except Exception as e:
         logger.error(f"Erreur calcul métriques valorisation: {e}")
         return None
+
 
 def apply_valuation_gates(metrics):
     """
@@ -73,4 +67,3 @@ def apply_valuation_gates(metrics):
         return True, False, f"EV/EBITDA trop élevé: {ev_ebitda:.1f}"
 
     return False, True, None
-

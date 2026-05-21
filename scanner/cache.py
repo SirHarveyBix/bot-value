@@ -21,7 +21,7 @@ class CacheManager:
             return None
 
         try:
-            with open(path, 'r') as f:
+            with open(path, "r") as f:
                 entry = json.load(f)
 
             fetched_at = datetime.fromisoformat(entry["fetched_at"])
@@ -36,15 +36,13 @@ class CacheManager:
     def set(self, category, key, data):
         """Enregistre une donnée dans le cache."""
         path = self._get_path(category, key)
-        entry = {
-            "fetched_at": datetime.now().isoformat(),
-            "data": data
-        }
+        entry = {"fetched_at": datetime.now().isoformat(), "data": data}
         try:
-            with open(path, 'w') as f:
+            with open(path, "w") as f:
                 json.dump(entry, f)
         except Exception as e:
             logger.error(f"Erreur écriture cache {category}:{key} - {e}")
+
 
 # Instance globale
 cache = CacheManager()

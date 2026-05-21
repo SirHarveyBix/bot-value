@@ -8,9 +8,9 @@ from telegram.error import RetryAfter
 
 from scanner.config import CONFIG, logger
 
-_HTML_OPEN_TAG_RE = re.compile(r'<(\w+)[^>/]*>')
-_HTML_CLOSE_TAG_RE = re.compile(r'</(\w+)>')
-_TELEGRAM_INLINE_TAGS = frozenset(('b', 'i', 'u', 's', 'a', 'code', 'pre'))
+_HTML_OPEN_TAG_RE = re.compile(r"<(\w+)[^>/]*>")
+_HTML_CLOSE_TAG_RE = re.compile(r"</(\w+)>")
+_TELEGRAM_INLINE_TAGS = frozenset(("b", "i", "u", "s", "a", "code", "pre"))
 
 
 def escape_html(text):
@@ -25,7 +25,7 @@ def truncate_message(msg: str, max_chars: int = None) -> str:
     if len(msg) <= max_chars:
         return msg
     suffix = "\n[message tronqué]"
-    return msg[:max_chars - len(suffix)] + suffix
+    return msg[: max_chars - len(suffix)] + suffix
 
 
 def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
@@ -35,19 +35,19 @@ def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
     if len(msg) <= max_chars:
         return msg
     suffix = "\n[message tronqué]"
-    truncated = msg[:max_chars - len(suffix)] + suffix
+    truncated = msg[: max_chars - len(suffix)] + suffix
     open_tags: list[str] = []
-    for m in re.finditer(r'<(/?)(\w+)[^>]*>', truncated):
+    for m in re.finditer(r"<(/?)(\w+)[^>]*>", truncated):
         tag = m.group(2).lower()
         if tag not in _TELEGRAM_INLINE_TAGS:
             continue
-        if m.group(1) == '/':
+        if m.group(1) == "/":
             if open_tags and open_tags[-1] == tag:
                 open_tags.pop()
         else:
             open_tags.append(tag)
     for tag in reversed(open_tags):
-        truncated += f'</{tag}>'
+        truncated += f"</{tag}>"
     return truncated
 
 
@@ -129,7 +129,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         name = escape_html(row.get("name", row["symbol"]))
         score = int(row["score_global"])
 
-        msg = f"#{i+1} 📈 <b>{name}</b> (${symbol})\n"
+        msg = f"#{i + 1} 📈 <b>{name}</b> (${symbol})\n"
         msg += f"Score Global : {score}/100\n"
         msg += f"├ Qualité     : {int(row['score_quality'])}/100\n"
         msg += f"├ Valorisation: {int(row['score_valuation'])}/100\n"
@@ -152,7 +152,9 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
 
         try:
-            await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML", disable_web_page_preview=True)
+            await send_message_safe(
+                bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML", disable_web_page_preview=True
+            )
             await asyncio.sleep(1.5)
         except Exception as e:
             logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
@@ -166,12 +168,14 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         for i, (_, row) in enumerate(top_etfs.iterrows()):
             symbol = escape_html(row["symbol"])
             score = int(row["score_global"])
-            msg = f"#{i+1} <b>{symbol}</b>\n"
+            msg = f"#{i + 1} <b>{symbol}</b>\n"
             msg += f"Score : {score}/100 | Perf 6M : {row['perf_6m']:.1%}\n"
             msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
 
             try:
-                await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML", disable_web_page_preview=True)
+                await send_message_safe(
+                    bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML", disable_web_page_preview=True
+                )
                 await asyncio.sleep(1.5)
             except Exception as e:
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")

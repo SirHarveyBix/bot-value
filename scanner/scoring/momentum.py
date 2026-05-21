@@ -15,6 +15,7 @@ def compute_analyst_revision_3m(estimates: list) -> float | None:
         return None
     return (current_eps - prev_eps) / abs(prev_eps)
 
+
 SECTOR_ETF_MAP = {
     "Technology": "XLK",
     "Health Care": "XLV",
@@ -26,8 +27,9 @@ SECTOR_ETF_MAP = {
     "Materials": "XLB",
     "Real Estate": "XLRE",
     "Utilities": "XLU",
-    "Communication Services": "XLC"
+    "Communication Services": "XLC",
 }
+
 
 def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
     """
@@ -35,7 +37,7 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
     prices_df: OHLCV du ticker.
     sector_prices_df: OHLCV de l'ETF sectoriel correspondant.
     """
-    if prices_df is None or len(prices_df) < 126: # 126 jours = ~6 mois
+    if prices_df is None or len(prices_df) < 126:  # 126 jours = ~6 mois
         return {}
 
     try:
@@ -72,11 +74,12 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
             "perf_1m": perf_1m,
             "momentum_adj": momentum_adj,
             "outperf_6m": outperf_6m,
-            "surprise_pct": surprise_pct
+            "surprise_pct": surprise_pct,
         }
     except Exception as e:
         logger.error(f"Erreur calcul momentum: {e}")
         return None
+
 
 def apply_momentum_penalties(score, metrics):
     """
