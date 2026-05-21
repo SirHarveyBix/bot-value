@@ -52,14 +52,19 @@ def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
 
 
 async def send_message_safe(bot: Bot, chat_id, text: str, **kwargs) -> None:
-    """Envoie un message Telegram en gérant RetryAfter (rate limit 429)."""
+    """Envoie un message Telegram en gérant RetryAfter (rate limit 429) et toute erreur."""
     try:
         await bot.send_message(chat_id=chat_id, text=text, **kwargs)
     except RetryAfter as e:
         wait = int(e.retry_after) + 1
         logger.warning(f"Telegram RetryAfter {wait}s — pause avant réenvoi")
         await asyncio.sleep(wait)
-        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        except Exception as e2:
+            logger.error(f"Telegram échec après retry: {e2}")
+    except Exception as e:
+        logger.error(f"Telegram send_message_safe: {e} (chat_id={chat_id})")
 
 
 def _get_bot():

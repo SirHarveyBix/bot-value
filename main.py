@@ -182,11 +182,34 @@ async def run_scanner(force=False):
         logger.exception(f"Erreur critique lors du scan: {e}")
 
 
+async def test_telegram():
+    """Envoie un message Telegram de test pour vérifier la configuration."""
+    from scanner.notifier import _get_bot, send_message_safe
+
+    bot, chat_id = _get_bot()
+    if not bot:
+        logger.error("Token Telegram manquant dans .env (TELEGRAM_BOT_TOKEN).")
+        return
+    logger.info(f"Test Telegram → chat_id={chat_id}")
+    await send_message_safe(
+        bot,
+        chat_id,
+        "✅ <b>ValueMomentum Scanner — test de connexion</b>\nTelegram opérationnel.",
+        parse_mode="HTML",
+    )
+    logger.info("Message de test envoyé. Vérifiez Telegram.")
+
+
 async def main():
     parser = argparse.ArgumentParser(description="ValueMomentum Scanner")
     parser.add_argument("--force", action="store_true", help="Force le scan même si le marché est fermé")
     parser.add_argument("--now", action="store_true", help="Lance le scan immédiatement et quitte")
+    parser.add_argument("--test-telegram", action="store_true", help="Envoie un message Telegram de test et quitte")
     args = parser.parse_args()
+
+    if args.test_telegram:
+        await test_telegram()
+        return
 
     if args.now or args.force:
         await run_scanner(force=args.force)

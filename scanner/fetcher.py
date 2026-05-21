@@ -279,7 +279,9 @@ async def fetch_fmp_data(client, symbol):
                     pass
 
         roe_3y = None
-        if is_data and bs_data and len(is_data) >= 1 and len(bs_data) >= 1:
+        is_list = isinstance(is_data, list)
+        bs_list = isinstance(bs_data, list)
+        if is_list and bs_list and len(is_data) >= 1 and len(bs_data) >= 1:
             roes = []
             for i in range(min(3, len(is_data), len(bs_data))):
                 ni = is_data[i].get("netIncome", 0)
@@ -288,6 +290,13 @@ async def fetch_fmp_data(client, symbol):
                     roes.append(ni / te)
             if roes:
                 roe_3y = sum(roes) / len(roes)
+        else:
+            logger.debug(f"FMP IS/BS vide ou non-liste pour {symbol} (is={type(is_data).__name__}[{len(is_data) if isinstance(is_data, (list,dict)) else '?'}], bs={type(bs_data).__name__}[{len(bs_data) if isinstance(bs_data, (list,dict)) else '?'}])")
+
+        # Fallback : IS annuel indisponible sur plan gratuit → utilise ROE TTM comme proxy
+        if roe_3y is None and r.returnOnEquityTTM is not None:
+            roe_3y = r.returnOnEquityTTM
+            logger.debug(f"ROE TTM fallback pour {symbol} (IS annuel vide sur ce plan FMP)")
 
         return {
             "symbol": symbol,

@@ -1337,3 +1337,70 @@ def test_get_first_seen_dates_batch(tmp_path):
     assert result["AAPL"] == "2026-01-01"
     assert result["MSFT"] == "2026-01-01"
     assert result["GOOG"] == "2026-05-21"
+
+
+# ── BF-005/BF-006 : ROE TTM fallback quand IS annuel vide ───────────────────
+
+
+def test_roe_ttm_fallback_when_is_empty():
+    """roe_3y = None si IS vide → quality gate retourne 'ROE 3 ans indisponible'."""
+    from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
+
+    # Simule is_data=[] : fetch_fmp_data retourne roe_3y=None sans fallback
+    info_no_roe = {
+        "roe_3y": None,
+        "roicTTM": None,
+        "operatingMargins": 0.20,
+        "sector": "Technology",
+        "netDebt": 1e9,
+        "ebitda": 2e9,
+        "freeCashflow": 5e8,
+        "marketCap": 1e10,
+        "bookValuePerShare": 10.0,
+    }
+    metrics = calculate_quality_metrics(info_no_roe)
+    passed, reason, _ = apply_quality_gates(metrics, ticker_info=info_no_roe)
+    assert not passed
+    assert "ROE" in reason
+
+
+def test_roe_ttm_fallback_allows_ticker():
+    """roe_3y rempli via fallback TTM → quality gate passe si ROE positif."""
+    from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
+
+    # Simule le fallback : fetch_fmp_data a mis roe_ttm dans roe_3y
+    info_roe_ttm = {
+        "roe_3y": 0.18,  # valeur TTM injectée comme fallback
+        "roicTTM": 0.12,
+        "operatingMargins": 0.20,
+        "sector": "Technology",
+        "netDebt": 1e9,
+        "ebitda": 2e9,
+        "freeCashflow": 5e8,
+        "marketCap": 1e10,
+        "bookValuePerShare": 10.0,
+    }
+    metrics = calculate_quality_metrics(info_roe_ttm)
+    passed, reason, _ = apply_quality_gates(metrics, ticker_info=info_roe_ttm)
+    assert passed, f"Doit passer avec ROE TTM fallback: {reason}"
+
+
+# ── BF-008 : send_message_safe ne crash pas sur erreur Telegram ──────────────
+
+
+@pytest.mark.asyncio
+async def test_send_message_safe_catches_bad_request():
+    """send_message_safe : BadRequest (chat not found) → log error, pas de crash."""
+    from unittest.mock import AsyncMock, patch
+
+    from telegram.error import BadRequest
+
+    from scanner.notifier import send_message_safe
+
+    mock_bot = AsyncMock()
+    mock_bot.send_message.side_effect = BadRequest("Bad Request: chat not found")
+
+    # Ne doit pas lever d'exception
+    with patch("scanner.notifier.logger") as mock_logger:
+        await send_message_safe(mock_bot, "bad_chat_id", "test")
+        assert mock_logger.error.called
