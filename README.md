@@ -119,7 +119,9 @@ python3 main.py --now --force
 - `--now` : lance le scan et quitte (pas de scheduler).
 - `--force` : ignore la vérification du calendrier NYSE.
 
-Un scan complet sur l'univers par défaut (~40 tickers) prend environ **2 à 5 minutes**. Vous recevrez un message Telegram à la fin.
+⚠️ **Prérequis** : le fichier univers doit contenir ≥ 100 tickers. Si ce n'est pas fait, lancez d'abord `PYTHONPATH=. python3 scanner/refresh_universe.py sp500` (voir section [Gestion de l'univers](#gestion-de-lunivers-de-tickers)).
+
+Un scan complet (~600 tickers) prend environ **10 à 15 minutes**. Vous recevrez un message Telegram à la fin.
 
 ---
 
@@ -303,16 +305,29 @@ rm ~/Library/LaunchAgents/com.valuemomentum.plist
 
 ## Gestion de l'univers de tickers
 
-L'univers par défaut (`data/universe/tickers_universe.json`) contient ~40 tickers pour le test. Pour un scan institutionnel complet (~700 tickers), rechargez l'univers :
+L'univers par défaut (`data/universe/tickers_universe.json`) contient ~40 tickers pour le test initial. Le scanner requiert **au minimum 100 tickers éligibles** pour lancer un scan. Pour peupler l'univers complet :
+
+### Étape obligatoire avant le premier scan réel
 
 ```bash
 source venv/bin/activate
-PYTHONPATH=. python3 scanner/refresh_universe.py sp500
-PYTHONPATH=. python3 scanner/refresh_universe.py nasdaq100
-PYTHONPATH=. python3 scanner/refresh_universe.py india
+pip install -r requirements.txt   # s'assure que lxml est installé
+
+PYTHONPATH=. python3 scanner/refresh_universe.py sp500      # ~503 tickers S&P 500
+PYTHONPATH=. python3 scanner/refresh_universe.py nasdaq100  # +100 tickers Nasdaq
 ```
 
-> Un scan sur 700+ tickers prend **10 à 15 minutes** (délai volontaire entre chaque ticker pour éviter le bannissement Yahoo Finance).
+Après cette étape, l'univers contient ~600 tickers et le scanner peut démarrer normalement.
+
+### Sources disponibles
+
+| Commande    | Source                 | Tickers            |
+| ----------- | ---------------------- | ------------------ |
+| `sp500`     | Wikipedia — S&P 500    | ~503               |
+| `nasdaq100` | Wikipedia — Nasdaq-100 | ~100               |
+| `india`     | Wikipedia — NIFTY 50   | 50 (suffixe `.NS`) |
+
+> Un scan complet sur 600+ tickers prend **10 à 15 minutes** (délais volontaires entre chunks yfinance pour éviter le ban IP).
 
 ---
 
