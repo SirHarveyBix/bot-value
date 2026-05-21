@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import sqlite3 as _sqlite3
 from datetime import datetime
 
 import pandas_market_calendars as mcal
@@ -13,14 +12,15 @@ from scanner.config import CONFIG, logger
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
-from scanner.notifier import notify, notify_panic
+from scanner.notifier import notify, notify_panic, notify_vix_unavailable
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
 from scanner.storage import (
     DB_PATH,
-    get_first_seen_date,
-    save_scan_entry,
+    get_first_seen_dates_batch,
+    reconstruct_portfolio_and_maturation,
     save_scanned_universe,
     save_signals,
+    update_portfolio_flags,
     update_signal_returns,
 )
 from scanner.universe import build_eligible_universe, load_universe
@@ -57,9 +57,17 @@ async def run_scanner(force=False):
             spy_close = market_history["Close"]["SPY"]
             vix_close = market_history["Close"]["^VIX"]
 
-            ema200 = spy_close.ewm(span=200, adjust=False).mean().iloc[-1].item()
-            current_spy = spy_close.iloc[-1].item()
-            current_vix = vix_close.iloc[-1].item()
+            spy_valid = spy_close.replace(0, float("nan")).dropna()
+            vix_valid = vix_close.replace(0, float("nan")).dropna()
+
+            if spy_valid.empty or vix_valid.empty:
+                logger.error("VIX ou SPY indisponible (série vide après dropna) — scan annulé.")
+                await notify_vix_unavailable()
+                return
+
+            ema200 = spy_valid.ewm(span=200, adjust=False).mean().iloc[-1].item()
+            current_spy = spy_valid.iloc[-1].item()
+            current_vix = vix_valid.iloc[-1].item()
 
             regime = evaluate_market_regime(current_vix, current_spy, ema200)
             logger.info(
@@ -69,15 +77,9 @@ async def run_scanner(force=False):
         market_regime = regime.value
 
         if regime == MarketRegime.PANIC:
-            market_data = {
-                "regime": market_regime,
-                "spy_price": current_spy,
-                "spy_ema200": ema200,
-                "vix": current_vix,
-            }
-            await save_scan_entry(market_data)
-            await notify_panic(current_vix, current_spy, ema200)
-            return
+            logger.info(
+                "Market Gate: VIX > 35 (PANIC). Le scan complet continue en mode silencieux et persistera les signaux en base."
+            )
 
         # 1. Universe Builder
         universe = load_universe()
@@ -137,21 +139,33 @@ async def run_scanner(force=False):
         market_data = {"regime": market_regime, "spy_price": current_spy, "spy_ema200": ema200, "vix": current_vix}
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
+        # Simulation du portefeuille, maturation et sorties
+        portfolio: dict = {}
+        exits_today: list = []
+        try:
+            import sqlite3 as _sqlite3
+
+            with _sqlite3.connect(DB_PATH) as _conn:
+                portfolio, exits_today = reconstruct_portfolio_and_maturation(_conn)
+        except Exception as _e:
+            logger.warning(f"Impossible de reconstruire le portefeuille: {_e}")
+
+        update_portfolio_flags(scan_date_str, portfolio, exits_today)
+
         # Gap 1: enrichir top_10_stocks avec first_seen_date depuis SQLite avant notify
         if not top_10_stocks.empty:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            try:
-                _conn = _sqlite3.connect(DB_PATH)
-                top_10_stocks = top_10_stocks.copy()
-                top_10_stocks["first_seen_date"] = top_10_stocks["symbol"].apply(
-                    lambda s: get_first_seen_date(_conn, s) or today_str
-                )
-                _conn.close()
-            except Exception as _e:
-                logger.warning(f"Impossible de lire first_seen_date depuis SQLite: {_e}")
+            first_seen_map = get_first_seen_dates_batch(top_10_stocks["symbol"].tolist(), scan_date_str)
+            top_10_stocks = top_10_stocks.copy()
+            top_10_stocks["first_seen_date"] = top_10_stocks["symbol"].map(first_seen_map)
 
-        # 9. Notify — T002: Bug 1 fix (market_regime=market_regime, pas regime)
-        await notify(top_10_stocks, top_5_etfs, market_regime=market_regime)
+        # 9. Notify — En cas de panique (VIX > 35), on envoie uniquement le message de crise (Silent Scan)
+        # Sinon on envoie les signaux normaux enrichis du portefeuille et des sorties
+        if market_regime == "panic":
+            await notify_panic(current_vix, current_spy, ema200)
+        else:
+            await notify(
+                top_10_stocks, top_5_etfs, market_regime=market_regime, portfolio=portfolio, exits_today=exits_today
+            )
 
         if not top_10_stocks.empty:
             logger.info("TOP 5 STOCKS IDENTIFIED:")

@@ -71,16 +71,16 @@ def _get_bot():
 
 
 async def notify_panic(vix: float, spy: float, ema200: float):
-    """Envoie le message Telegram de régime Panique (Lacune 9)."""
+    """Envoie le message Telegram de régime Panique (Silent Scan - Lacune 9)."""
     bot, chat_id = _get_bot()
     if not bot:
         logger.warning("Notifications Telegram désactivées (token manquant).")
         return
     msg = (
-        "🚨 <b>RÉGIME DE PANIQUE — SCAN ANNULÉ</b>\n"
+        "🚨 <b>RÉGIME DE PANIQUE — SCAN SILENCIEUX</b>\n"
         f"VIX : {vix:.1f} &gt; 35\n"
         f"SPY : {spy:.2f} vs EMA200 : {ema200:.2f}\n"
-        "<i>Aucun signal émis. Capital preservation prioritaire.</i>"
+        "<i>Le scan quantitatif a été exécuté et les données persistées, mais aucune alerte individuelle d'achat n'est émise pour préserver le capital.</i>"
     )
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
@@ -99,7 +99,21 @@ async def notify_fmp_unavailable():
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
-async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
+async def notify_vix_unavailable():
+    """Envoie l'alerte Telegram VIX/SPY indisponible → scan annulé (T081)."""
+    bot, chat_id = _get_bot()
+    if not bot:
+        logger.warning("Notifications Telegram désactivées (token manquant).")
+        return
+    msg = (
+        "⚠️ <b>VIX indisponible — scan annulé</b>\n"
+        "<i>La série VIX ou SPY ne contient aucune valeur valide (NaN/0). "
+        "Le scan a été interrompu pour préserver l'intégrité du Market Gate.</i>"
+    )
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
+
+
+async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfolio=None, exits_today=None):
     """
     Envoie les signaux via Telegram.
     Respecte la limite de 1 message/seconde avec un délai de 1.5s.
@@ -112,6 +126,16 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
     # T073 — log JSON avant envoi (loguru serialize=True → signals_{date}.jsonl)
     stock_symbols = [row["symbol"] for _, row in top_stocks.iterrows()]
     logger.info(f"signals_dispatch regime={market_regime} stocks={stock_symbols} count={len(stock_symbols)}")
+
+    # 0. Envoi des sorties de position s'il y en a
+    if exits_today:
+        exit_msg = "🚨 <b>SORTIE DE POSITION</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        for ex in exits_today:
+            exit_msg += f"❌ <b>{escape_html(ex['name'])}</b> (${escape_html(ex['symbol'])})\n"
+            exit_msg += f"├ Raison: Rang {ex['rank']} (&gt;15) ou Score {ex['score']:.1f}/100 (&lt;70)\n"
+            exit_msg += f"└ Détention consécutive: {ex['days_held']} jours\n\n"
+        await send_message_safe(bot, chat_id, truncate_message_html_safe(exit_msg), parse_mode="HTML")
+        await asyncio.sleep(1.5)
 
     # 1. Envoi du Header
     header = f"📊 <b>ValueMomentum Scanner — {datetime.now().strftime('%Y-%m-%d')}</b>\n"
@@ -129,7 +153,23 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
         name = escape_html(row.get("name", row["symbol"]))
         score = int(row["score_global"])
 
-        msg = f"#{i + 1} 📈 <b>{name}</b> (${symbol})\n"
+        # Détermination du statut de portefeuille pour le ticker
+        status_tag = ""
+        if portfolio and symbol in portfolio:
+            item = portfolio[symbol]
+            status = item["status"]
+            days_held = item["days_held"]
+            if status == "ACHAT":
+                status_tag = "🚀 <b>ACHAT</b> (Nouveau signal)\n"
+            elif status == "MATURATION":
+                status_tag = f"⏳ <b>MATURATION</b> (Jour {days_held}/3)\n"
+            elif status == "HOLD":
+                status_tag = f"🟢 <b>HOLD</b> (Détention : {days_held} jours)\n"
+
+        if status_tag:
+            msg = f"#{i + 1}\n{status_tag}📈 <b>{name}</b> (${symbol})\n"
+        else:
+            msg = f"#{i + 1} 📈 <b>{name}</b> (${symbol})\n"
         msg += f"Score Global : {score}/100\n"
         msg += f"├ Qualité     : {int(row['score_quality'])}/100\n"
         msg += f"├ Valorisation: {int(row['score_valuation'])}/100\n"
@@ -181,8 +221,8 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None):
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
 
 
-async def notify(top_stocks, top_etfs, market_regime=None):
+async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits_today=None):
     """Envoi des signaux via Telegram (Asynchrone)."""
-    if top_stocks.empty and top_etfs.empty:
+    if top_stocks.empty and top_etfs.empty and not exits_today:
         return
-    await send_telegram_signals(top_stocks, top_etfs, market_regime)
+    await send_telegram_signals(top_stocks, top_etfs, market_regime, portfolio, exits_today)

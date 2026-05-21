@@ -16,6 +16,33 @@ from scanner.config import CONFIG, logger
 from scanner.notifier import notify_fmp_unavailable
 from scanner.scoring.momentum import compute_analyst_revision_3m
 
+# yfinance handles its own session natively via curl_cffi to bypass bot protections.
+# Do not pass a custom requests Session.
+
+
+def normalize_sector_name(sector: str | None) -> str:
+    if not sector:
+        return "Unknown"
+    s = sector.strip()
+    mapping = {
+        "Financial Services": "Financials",
+        "Financial": "Financials",
+        "Healthcare": "Health Care",
+        "Health Services": "Health Care",
+        "Consumer Cyclical": "Consumer Discretionary",
+        "Consumer Defensive": "Consumer Staples",
+        "Basic Materials": "Materials",
+        "Industrial Goods": "Industrials",
+        "Technology": "Technology",
+        "Energy": "Energy",
+        "Real Estate": "Real Estate",
+        "Utilities": "Utilities",
+        "Communication Services": "Communication Services",
+        "Industrials": "Industrials",
+    }
+    return mapping.get(s, s)
+
+
 # TTL depuis config (anti race-condition : 27h > 24h pour éviter expiration 3 min avant scan 09h35)
 TTL_FUNDAMENTALS = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)
 TTL_PRICES = CONFIG["scanner"].get("cache_ttl_prices", 14400)
@@ -68,6 +95,7 @@ class FMPKeyMetricsTTM(_FMPBase):
     ebitdaTTM: Optional[float] = None
     totalDebtTTM: Optional[float] = None
     freeCashFlowTTM: Optional[float] = None
+    bookValuePerShareTTM: Optional[float] = None
 
 
 def _parse_fmp_response(raw: list | dict, model_class: type[_FMPBase], ticker: str) -> Optional[_FMPBase]:
@@ -257,7 +285,7 @@ async def fetch_fmp_data(client, symbol):
         return {
             "symbol": symbol,
             "longName": p.get("companyName"),
-            "sector": p.get("sector"),
+            "sector": normalize_sector_name(p.get("sector")),
             "marketCap": p.get("mktCap"),
             "roe_ttm": r.returnOnEquityTTM,
             "roe_3y": roe_3y,
@@ -275,6 +303,7 @@ async def fetch_fmp_data(client, symbol):
             "surprise_date": surprise_date,
             "analyst_revision_3m": analyst_revision_3m,
             "mostRecentQuarter": most_recent_quarter_ts,
+            "bookValuePerShare": k.bookValuePerShareTTM,
             "source": "FMP",
         }
     except FMPUnavailableError:

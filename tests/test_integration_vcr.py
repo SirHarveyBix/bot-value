@@ -2,6 +2,7 @@ import os
 import sys
 
 import httpx
+import numpy as np
 import pandas as pd
 import pytest
 from freezegun import freeze_time
@@ -20,8 +21,6 @@ async def test_full_pipeline_vcr(tmp_path):
     min_universe_size patché à 1 car seulement 5 stocks mock.
     """
     from unittest.mock import patch
-
-    import numpy as np
 
     import scanner.scoring.engine as engine_module
     import scanner.storage as storage_module
@@ -171,13 +170,17 @@ async def test_fmp_budget_counter():
 # T043 — Pipeline panic : VIX=40 → 0 signaux, notify_panic appelé
 @pytest.mark.skipif(sys.version_info < (3, 10), reason="pandas_market_calendars 4.4+ requiert Python 3.10+")
 @pytest.mark.asyncio
-async def test_full_pipeline_panic_regime():
+async def test_full_pipeline_panic_regime(tmp_path):
     """
-    VIX=40 → scan termine après notify_panic(), 0 rows dans signals.
+    VIX=40 -> Le scan complet continue en mode silencieux et persistera les signaux en base.
+    S'assure que notify_panic() est bien appelé.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     import main as main_module
+    from scanner import fetcher as fetcher_module
+    from scanner import storage as storage_module
+    from scanner.config import CONFIG
 
     panic_called = False
 
@@ -185,27 +188,70 @@ async def test_full_pipeline_panic_regime():
         nonlocal panic_called
         panic_called = True
 
-    def mock_save_scan_entry(market_data):
-        assert market_data["regime"] == "panic"
+    patched_cfg = {
+        **CONFIG,
+        "scanner": {**CONFIG["scanner"], "min_universe_size": 1},
+        "scoring": CONFIG["scoring"],
+    }
 
-    spy_prices = pd.Series([450.0] * 400)
-    vix_prices = pd.Series([40.0] * 400)
-    mock_df = pd.DataFrame(
+    mock_info = {
+        "longName": "Mock Corp",
+        "sector": "Technology",
+        "marketCap": 5_000_000_000,
+        "roe_ttm": 0.20,
+        "roe_3y": 0.20,
+        "operatingMargins": 0.15,
+        "totalDebt": 1e9,
+        "totalCash": None,
+        "netDebt": 5e8,
+        "ebitda": 5e8,
+        "freeCashflow": 3e8,
+        "forwardPE": 20.0,
+        "enterpriseToEbitda": 15.0,
+        "pegRatio": 1.5,
+        "surprise_pct": 0.05,
+        "surprise_date": "2024-10-15",
+        "analyst_revision_3m": 0.02,
+        "mostRecentQuarter": 1728000000.0,
+        "source": "FMP",
+    }
+
+    dates = pd.date_range("2024-01-01", periods=252, freq="B")
+
+    async def mock_fetch_ticker(symbol, client=None):
+        return {**mock_info, "symbol": symbol}
+
+    stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+
+    spy_prices = pd.Series([450.0] * 252, index=dates)
+    vix_prices = pd.Series([40.0] * 252, index=dates)  # PANIC (VIX > 35)
+    mock_indices = pd.DataFrame(
         {
             ("Close", "SPY"): spy_prices,
             ("Close", "^VIX"): vix_prices,
         }
     )
-    mock_df.columns = pd.MultiIndex.from_tuples(mock_df.columns)
+    mock_indices.columns = pd.MultiIndex.from_tuples(mock_indices.columns)
+
+    data_dict = {}
+    for s in stocks + ["SPY"]:
+        for col in ["Close", "Open", "High", "Low", "Volume"]:
+            data_dict[(s, col)] = np.linspace(100, 130, 252) if col != "Volume" else np.full(252, 1e6)
+    mock_batch = pd.DataFrame(data_dict, index=dates)
+    mock_batch.columns = pd.MultiIndex.from_tuples(mock_batch.columns)
+
+    db_file = str(tmp_path / "test_panic.db")
 
     with patch.object(main_module, "notify_panic", side_effect=mock_notify_panic):
-        with patch.object(main_module, "save_scan_entry", side_effect=mock_save_scan_entry):
-            with patch.object(main_module, "is_market_open", return_value=True):
-                with patch.object(main_module, "fetch_market_indices", return_value=mock_df):
-                    with patch.object(
-                        main_module, "fetch_prices_batch", new_callable=AsyncMock, return_value=pd.DataFrame()
-                    ):
-                        await main_module.run_scanner(force=True)
+        with patch.object(main_module, "is_market_open", return_value=True):
+            with patch.object(main_module, "CONFIG", patched_cfg):
+                with patch.object(fetcher_module, "CONFIG", patched_cfg):
+                    with patch.object(main_module, "DB_PATH", db_file):
+                        with patch.object(storage_module, "DB_PATH", db_file):
+                            with patch.object(fetcher_module, "fetch_ticker_info", side_effect=mock_fetch_ticker):
+                                with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_batch):
+                                    with patch.object(main_module, "fetch_market_indices", return_value=mock_indices):
+                                        await main_module.run_scanner(force=True)
 
     assert panic_called, "notify_panic() doit être appelé pour VIX=40"
 

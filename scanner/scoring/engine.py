@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from scanner.config import CONFIG, logger
+from scanner.filters import sanity_check_gate
 from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, calculate_momentum_metrics
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
@@ -131,6 +132,10 @@ def stock_scoring_pipeline(all_data, symbols):
 
         info = data["info"]
         prices = data["prices"]
+
+        # Sanity Check Gate (baisse < -45% ou hausse > +50% journalière)
+        if not sanity_check_gate(prices, symbol):
+            continue
 
         # T022: Exclusion sector=None (Lacune 7)
         if info.get("sector") is None:
