@@ -917,6 +917,7 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
     """Vérifie le cycle de maturation de 3 jours et la sortie par hystérésis."""
     import sqlite3
     from unittest.mock import patch
+
     from scanner.storage import reconstruct_portfolio_and_maturation
 
     db_path = str(tmp_path / "test_portfolio.db")

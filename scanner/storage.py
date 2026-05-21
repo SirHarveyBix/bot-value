@@ -473,7 +473,7 @@ def reconstruct_portfolio_and_maturation(conn):
     portfolio = {}  # symbol -> {"days_held": int, "last_rank": int, "last_score": float, "name": str}
     exits_today = []
 
-    for idx, (scan_id, scan_date) in enumerate(scans_rows):
+    for idx, (scan_id, _scan_date) in enumerate(scans_rows):
         is_last_scan = idx == len(scans_rows) - 1
         if is_last_scan:
             exits_today = []

@@ -2,10 +2,9 @@ import os
 import sys
 
 import httpx
+import numpy as np
 import pandas as pd
 import pytest
-import numpy as np
-
 from freezegun import freeze_time
 
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices
@@ -176,7 +175,7 @@ async def test_full_pipeline_panic_regime(tmp_path):
     VIX=40 -> Le scan complet continue en mode silencieux et persistera les signaux en base.
     S'assure que notify_panic() est bien appelé.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     import main as main_module
     from scanner import fetcher as fetcher_module

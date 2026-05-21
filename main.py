@@ -18,7 +18,6 @@ from scanner.storage import (
     DB_PATH,
     get_first_seen_dates_batch,
     reconstruct_portfolio_and_maturation,
-    save_scan_entry,
     save_scanned_universe,
     save_signals,
     update_portfolio_flags,

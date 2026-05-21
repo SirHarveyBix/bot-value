@@ -1,7 +1,7 @@
+import contextlib
 import json
 import os
 import sqlite3
-import contextlib
 from datetime import datetime, timedelta
 
 from scanner.config import logger
