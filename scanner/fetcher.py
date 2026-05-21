@@ -272,7 +272,7 @@ async def fetch_fmp_data(client, symbol):
                     pass
 
         roe_3y = None
-        if is_data and bs_data and len(is_data) >= 3 and len(bs_data) >= 3:
+        if is_data and bs_data and len(is_data) >= 1 and len(bs_data) >= 1:
             roes = []
             for i in range(min(3, len(is_data), len(bs_data))):
                 ni = is_data[i].get("netIncome", 0)

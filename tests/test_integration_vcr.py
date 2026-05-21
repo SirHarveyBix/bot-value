@@ -242,16 +242,19 @@ async def test_full_pipeline_panic_regime(tmp_path):
 
     db_file = str(tmp_path / "test_panic.db")
 
+    json_file = str(tmp_path / "signals_latest.json")
+
     with patch.object(main_module, "notify_panic", side_effect=mock_notify_panic):
         with patch.object(main_module, "is_market_open", return_value=True):
             with patch.object(main_module, "CONFIG", patched_cfg):
                 with patch.object(fetcher_module, "CONFIG", patched_cfg):
                     with patch.object(main_module, "DB_PATH", db_file):
                         with patch.object(storage_module, "DB_PATH", db_file):
-                            with patch.object(fetcher_module, "fetch_ticker_info", side_effect=mock_fetch_ticker):
-                                with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_batch):
-                                    with patch.object(main_module, "fetch_market_indices", return_value=mock_indices):
-                                        await main_module.run_scanner(force=True)
+                            with patch.object(storage_module, "JSON_PATH", json_file):
+                                with patch.object(fetcher_module, "fetch_ticker_info", side_effect=mock_fetch_ticker):
+                                    with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_batch):
+                                        with patch.object(main_module, "fetch_market_indices", return_value=mock_indices):
+                                            await main_module.run_scanner(force=True)
 
     assert panic_called, "notify_panic() doit être appelé pour VIX=40"
 

@@ -278,29 +278,31 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 
 ## Résumé
 
-| Phase             | User Story | Tâches        | Avancement    | Statut |
-| ----------------- | ---------- | ------------- | ------------- | ------ |
-| 1 Setup           | —          | T001–T007     | 6/7 85%       | 🔄     |
-| 2 Foundationnel   | —          | T008–T014     | 7/7 100%      | ✅     |
-| 3 Market Gate     | US2 (P1)   | T015–T023     | 9/9 100%      | ✅     |
-| 4 MVP Scan        | US1 (P1)   | T024–T040     | 17/17 100%    | ✅     |
-| 5 Entonnoir       | US3 (P2)   | T041–T046     | 6/6 100%      | ✅     |
-| 6 Persistance     | US4 (P2)   | T047–T052     | 6/6 100%      | ✅     |
-| 7 ETFs            | US5 (P3)   | T053–T057     | 1/5 20%       | 🔄     |
-| 8 Polish          | —          | T058–T067     | 5/10 50%      | 🔄     |
-| 9.1 v1.1 Rob.     | —          | T068–T073     | 6/6 100%      | ✅     |
-| 9.2 v1.1 Scoring  | US1        | T074–T076     | 3/3 100%      | ✅     |
-| 9.3 v1.1 Tests    | —          | T077–T079     | 3/3 100%      | ✅     |
-| 9.4 v1.1 Bugfixes | US1/US2    | T080–T082     | 3/3 100%      | ✅     |
-| **Total**         |            | **82 tâches** | **72/82 88%** |        |
+| Phase             | User Story | Tâches        | Avancement     | Statut |
+| ----------------- | ---------- | ------------- | -------------- | ------ |
+| 1 Setup           | —          | T001–T007     | 7/7 100%       | ✅     |
+| 2 Foundationnel   | —          | T008–T014     | 7/7 100%       | ✅     |
+| 3 Market Gate     | US2 (P1)   | T015–T023     | 9/9 100%       | ✅     |
+| 4 MVP Scan        | US1 (P1)   | T024–T040     | 17/17 100%     | ✅     |
+| 5 Entonnoir       | US3 (P2)   | T041–T046     | 6/6 100%       | ✅     |
+| 6 Persistance     | US4 (P2)   | T047–T052     | 6/6 100%       | ✅     |
+| 7 ETFs            | US5 (P3)   | T053–T057     | 5/5 100%       | ✅     |
+| 8 Polish          | —          | T058–T067     | 10/10 100%     | ✅     |
+| 9.1 v1.1 Rob.     | —          | T068–T073     | 6/6 100%       | ✅     |
+| 9.2 v1.1 Scoring  | US1        | T074–T076     | 3/3 100%       | ✅     |
+| 9.3 v1.1 Tests    | —          | T077–T079     | 3/3 100%       | ✅     |
+| 9.4 v1.1 Bugfixes | US1/US2    | T080–T082     | 3/3 100%       | ✅     |
+| **Total**         |            | **82 tâches** | **82/82 100%** | ✅     |
 
 > Légende : ✅ terminé · 🔄 en cours · ⬜ non démarré
 
-**Tâches restantes (13) :**
+**Bugs post-livraison corrigés (hors spec) :**
 
-- T004 — packages Python vides `scanner/__init__.py`
-- T053–T055, T057 — pipeline ETFs (scoring + notifier + tests)
-- T062, T064–T067 — Polish (tests hermétiques, README déploiement, launchd, pytest 100%)
+- BF-001 — `refresh_universe.py` : Wikipedia 403 → `requests` + User-Agent header
+- BF-002 — `requirements.txt` : `lxml` manquant → `pd.read_html` crash
+- BF-003 — `storage.py` : `signals_latest.json` jamais créé → `export_signals_json()` ajouté
+- BF-004 — `test_integration_vcr.py` : test contaminait `signals_latest.json` réel → `JSON_PATH` patché en `tmp_path`
+- BF-005 — `fetcher.py` : ROE exclu si FMP free tier retourne < 3 ans → condition `>= 1` an
 
 - **Tâches [P]** (parallélisables) : 42
 - **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches — ✅ complet
