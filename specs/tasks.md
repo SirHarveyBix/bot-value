@@ -14,7 +14,7 @@
 
 **Objectif** : Scaffolding projet + configuration + SQLite + scheduler vide fonctionnel
 
-- [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 245`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 97200`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 120`, `DATA_FRESHNESS_EXCLUSION_DAYS: 180`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
+- [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 175`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 97200`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 120`, `DATA_FRESHNESS_EXCLUSION_DAYS: 180`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
 - [x] T002 [P] Créer `.env.example` à la racine avec placeholders : `TELEGRAM_BOT_TOKEN=`, `TELEGRAM_CHAT_ID=`, `FMP_API_KEY=`
 - [x] T003 [P] Créer/vérifier `requirements.txt` avec dépendances épinglées : `yfinance>=0.2.40,<0.3.0`, `pandas>=2.1.0,<3.0.0`, `numpy>=1.26.0,<2.0.0`, `apscheduler>=4.0.0a5`, `pandas-market-calendars>=4.3.0`, `python-telegram-bot>=21.0,<22.0`, `httpx>=0.27.0,<0.28.0`, `PyYAML>=6.0.1,<7.0.0`, `python-dotenv>=1.0.0,<2.0.0`, `loguru>=0.7.2,<1.0.0`, `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`, `vcrpy`, `freezegun`, `supervisor>=4.2.0`
 - [x] T004 [P] Créer les packages Python vides : `scanner/__init__.py`, `scanner/scoring/__init__.py`
@@ -40,7 +40,7 @@
 - [x] T013 Implémenter `scanner/fetcher.py` : compteur global `fmp_call_counter = 0`, disjoncteur `if fmp_call_counter + 7 > budget_limit → return None`, reset dans `main.py` à chaque scan
 - [x] T014 Ajouter check `MIN_UNIVERSE_SIZE` dans `main.py` après `build_eligible_universe()` et AVANT shortlisting : si `len(eligible) < 100` → log `universe_too_small`, envoyer alerte Telegram erreur, return sans scan
 
-**Checkpoint** : `fetch_prices_chunked(700_tickers)` → 0 HTTP 429, data valide. `fmp_fetch()` → disjoncteur à 245. Cache 27h créé et relu correctement.
+**Checkpoint** : `fetch_prices_chunked(700_tickers)` → 0 HTTP 429, data valide. `fmp_fetch()` → disjoncteur à 175. Cache 27h créé et relu correctement.
 
 ---
 
@@ -68,9 +68,9 @@
 
 **Objectif** : Pipeline complet opérationnel — Chalutier → Sniper → Scoring 3 piliers → Top 10 Telegram
 
-**Test indépendant** : `python main.py --now --force` → réception Telegram Top 10 actions, scores non-nuls, budget FMP ≤ 245 calls
+**Test indépendant** : `python main.py --now --force` → réception Telegram Top 10 actions, scores non-nuls, budget FMP ≤ 175 calls
 
-- [x] T024 [US1] Implémenter `fetch_fmp_fundamentals(ticker) -> dict` dans `scanner/fetcher.py` : 7 endpoints séquentiels (`ratios-ttm`, `key-metrics-ttm`, `profile`, `income-statement?limit=3`, `balance-sheet-statement?limit=1`, `earnings-surprises`, `analyst-estimates`), incrémente `fmp_call_counter` × 7
+- [x] T024 [US1] Implémenter `fetch_fmp_fundamentals(ticker) -> dict` dans `scanner/fetcher.py` : 5 endpoints séquentiels (`ratios-ttm`, `key-metrics-ttm`, `profile`, `income-statement?limit=3`, `balance-sheet-statement?limit=3`), incrémente `fmp_call_counter` × 5 — `earnings-surprises` et `analyst-estimates` supprimés (indisponibles plan gratuit, BF-010)
 - [x] T025 [US1] Créer `scanner/scoring/quality.py` : `calculate_quality_metrics(ticker_info) -> dict` → `roe_3y` (moyenne ROE 3 bilans annuels FMP, jamais TTM ni yfinance), `operating_margin` (`operatingProfitMarginTTM`), `fcf_yield` (`freeCashFlowTTM / marketCap`), `debt_ebitda` (`netDebt / ebitda`)
 - [x] T026 [US1] Implémenter `apply_quality_gates(metrics, ticker_info) -> tuple[bool, str|None, list[str]]` dans `quality.py` : BVS ≤ 0 → exclude "book_value_per_share <= 0", ROE is None → exclude "ROE 3 ans indisponible", ROE < 0 → exclude "ROE négatif", EBITDA ≤ 0 → exclude, debt_ebitda > 6 → exclude, ROE > 1.50 + BVS < 5$ → flag `⚠️ ROE possiblement gonflé par buybacks` + `metrics["roe_capped"] = True`
 - [x] T027 [P] [US1] Implémenter exceptions sectorielles dans `quality.py` : `exclude_debt = sector in ["Financials", "Real Estate", "Utilities"]` → pilier Qualité sur 3 critères (ROE, marge op., FCF yield) si True
@@ -86,9 +86,9 @@
 - [x] T037 [US1] Implémenter `save_scan(conn, scan_data)` et `save_signals(conn, signals_list)` dans `storage.py` : `first_seen_date` = date courante si nouveau ticker, conservée si réapparition (query `SELECT first_seen_date FROM signals WHERE ticker=? ORDER BY scan_date ASC LIMIT 1`)
 - [x] T038 [US1] Câbler pipeline complet dans `main.py` : `build_eligible_universe` → MIN_UNIVERSE check → momentum score Chalutier → Top 30 → `fetch_fmp_fundamentals` (avec disjoncteur) → `stock_scoring_pipeline` → Top 10 → `save_scan` + `save_signals` → `send_signals`
 - [x] T039 [P] [US1] Test intégration (VCR + Freezegun mercredi 10h00 ET) : pipeline complet → 1 entrée `scans`, 10 entrées `signals`, `score_global` ∈ [0,100] pour chaque ticker, jamais NaN
-- [x] T040 [P] [US1] Test budget FMP : mock `fmp_call_counter`, run 30 tickers → assert `fmp_call_counter ≤ 245` (SC-001)
+- [x] T040 [P] [US1] Test budget FMP : mock `fmp_call_counter`, run 35 tickers → assert `fmp_call_counter ≤ 175` (SC-001) — 35 × 5 endpoints = 175 max
 
-**Checkpoint** : `python main.py --now --force` → message Telegram reçu dans les 15 min avec Top 10, scores non-nuls. Budget FMP ≤ 245. Scanner v1.0 MVP fonctionnel.
+**Checkpoint** : `python main.py --now --force` → message Telegram reçu dans les 15 min avec Top 10, scores non-nuls. Budget FMP ≤ 175. Scanner v1.0 MVP fonctionnel.
 
 ---
 
@@ -148,9 +148,9 @@
 
 - [x] T058 Créer `tests/conftest.py` : configuration VCR.py `record_mode="none"` par défaut, cassettes dans `tests/cassettes/`, fixtures Freezegun (mercredi 10h00 ET)
 - [x] T059 [P] Créer `tests/test_logic.py` complet : tests statiques scoring — `apply_quality_gates` (BVS ≤ 0, ROE None, ROE < 0, ROE > 150% + BVS < 5$ cap), decay earnings clampé [0,1], pénalités anti-extrême, winsorisation `RATIO_CLAMP`, `evaluate_market_regime` 4 scénarios
-- [x] T060 [P] Créer `tests/test_fetcher_vcr.py` : connecteurs yfinance chunked (chunk size 100, 2 cassettes) + FMP 7 endpoints (cassette par ticker) + disjoncteur 245 (mock counter)
+- [x] T060 [P] Créer `tests/test_fetcher_vcr.py` : connecteurs yfinance chunked (chunk size 100, 2 cassettes) + FMP 5 endpoints (cassette par ticker) + disjoncteur 175 (mock counter)
 - [x] T061 Créer `tests/test_integration_vcr.py` : pipeline complet (VCR + Freezegun) — scan complet → `scans` + `signals` écrits, Market Gate PANIC → 0 signaux, FMP indisponible → Telegram erreur + 0 signaux
-- [x] T062 Test mock FMP call counter : run complet 30 tickers via fixtures → assert `fmp_call_counter ≤ 245` (SC-001)
+- [x] T062 Test mock FMP call counter : run complet 35 tickers via fixtures → assert `fmp_call_counter ≤ 175` (SC-001)
 - [x] T063 [P] Vérifier exhaustivement `html.escape()` dans `notifier.py` : fixtures AT&T, Johnson & Johnson, tout nom avec `<>/&` → chaînes correctement escapées dans message final
 - [x] T064 [P] Documenter setup Mac Mini dans `README.md` section "Déploiement" : `pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0`, clone + venv + pip install, `supervisord -c supervisord.conf`
 - [x] T065 Créer script bash `scripts/install-launchd.sh` : génère `~/Library/LaunchAgents/com.valuemomentum.plist` depuis `PROJECT_DIR="$(pwd)"`, `launchctl load "$PLIST"` — flag `-n` obligatoire pour `KeepAlive`
@@ -309,6 +309,30 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 - BF-009 — `main.py` : `notify_yfinance_ban()` câblé sur `check_batch_data_ratio` failure ; `notify_exclusions()` envoyé après les signaux normaux
 - BF-010 — `fetcher.py` + `config.yaml` : API FMP v3 dépréciée août 2025 (retourne 403 sur tous les endpoints). Migration vers `/stable/` : URL format `?symbol=` au lieu de path param, nouveaux field names Pydantic (`priceToEarningsRatioTTM`, `returnOnEquityTTM` → key-metrics, `freeCashFlowYieldTTM`×marketCap pour montant FCF), suppression des endpoints indisponibles sur plan gratuit (`earnings-surprises` 404, `analyst-estimates` 402), budget réduit de 7→5 appels/ticker (175 max). Tests unitaires + intégration mis à jour.
 
+**Bugs corrigés post-revue expert (sprint fix/review-corrections-v1.1) :**
+
+- BF-011 — `fetcher.py` : fallback ROE TTM supprimé — si FMP retourne < 3 bilans annuels, `roe_3y = None` (pas d'approximation TTM). Viole la Règle d'Or et biaise le calcul 3Y. Warning log ajouté si `len(roes) < 3`.
+- BF-012 — `fetcher.py` : `surprise_pct` hardcodé à `0.0` → `None`. Sémantique incorrecte : inconnu ≠ absence de surprise. Endpoint `earnings-surprises` retourne 404 sur plan gratuit.
+- BF-013 — `fetcher.py` : `fetch_market_indices` sans timeout → risque de freeze silencieux du ThreadPool. Ajout `asyncio.wait_for(timeout=60.0)` autour du `asyncio.to_thread(yf.download)`.
+- BF-014 — `scoring/quality.py` : `apply_quality_gates` utilisait le ROE composite (`0.6×roe_3y + 0.4×roicTTM`) pour les gates d'exclusion → ROE gate doit utiliser `roe_3y` brut (sinon un `roe_3y` positif peut être exclu si `roicTTM` est très négatif). Le composite reste utilisé uniquement pour le percentile ranking.
+- BF-015 — `scoring/engine.py` : `(row.get(key) or 0)` propagait les NaN (NaN truthy en Python → `NaN or 0 == NaN`). Remplacement par helper `_sv(val)` utilisant `pd.isna()`. Ajout `score_global.fillna(0.0).clip(0.0, 100.0)` pour garantir SC-003.
+- BF-016 — `scoring/engine.py` : secteurs atypiques (Financials/Real Estate/Utilities) excluent `debt_ebitda` mais `fillna(0)` gaspillait le poids 10% → score qualité max = 90. Renormalisation par `÷ 0.90` (somme des 3 poids restants) pour rétablir max = 100.
+- BF-017 — `scoring/engine.py` + `scoring/valuation.py` : repondération 50/50 (qualité/momentum) se déclenchait quand P/E seul absent. Spec exige BOTH P/E ET EV/EBITDA absents. Condition corrigée dans `compute_valuation_score` et `apply_valuation_gates`.
+- BF-018 — `scoring/valuation.py` : dead code `trailingPE` supprimé (jamais peuplé par FMP stable). `apply_valuation_gates` : si `pe=None` mais `ev_ebitda` présent → `v_ok=True` (pas d'exclusion valorisation).
+- BF-019 — `main.py` : comparaison enum en chaîne `regime == "panic"` → `regime == MarketRegime.PANIC`. Comparaison string toujours `False` → panique jamais détectée.
+- BF-020 — `main.py` : `sqlite3.connect()` bloquant appelé directement dans `async run_scanner` → freeze Event Loop. Wrappé dans `asyncio.to_thread`.
+- BF-021 — `main.py` : `filter_post_scoring` devenue `async` mais appelée sans `await` → coroutine jamais exécutée, `top_10_stocks` = objet coroutine. `await` ajouté.
+- BF-022 — `main.py` : branche `else` manquante si DataFrame VIX vide (après `fetch_market_indices`) → scan continuait sans données marché. Ajout `notify_vix_unavailable() + return`.
+- BF-023 — `filters.py` : `data_freshness_check` lisait `lastFiscalYearEnd` (champ yfinance, ~507j) au lieu de `mostRecentQuarter` (champ FMP, ~90-150j) → excluait tous les tickers. Violation Règle d'Or.
+- BF-024 — `filters.py` : `earnings_calendar_check` appelait `yf.Ticker(symbol).calendar` de manière bloquante dans un contexte async → freeze Event Loop. Rendu `async` via `asyncio.to_thread`.
+- BF-025 — `universe.py` : constante `TTL_FUNDAMENTALS = 24 * 3600` (24h) en conflit silencieux avec `cache_ttl_fundamentals: 97200` (27h) du `config.yaml`. Constante locale supprimée, config utilisée directement.
+
+**Tâches techniques acceptées non-corrigées (contraintes plan gratuit FMP) :**
+
+- AT-001 — `universe.py` utilise `yf.Ticker().info` pour `marketCap`/`price`/`volume` sur ~600 tickers (eligibilité Chalutier) : FMP incompatible avec ce volume (~600 appels = budget dépassé). Tradeoff accepté explicitement.
+- AT-002 — `surprise_pct` toujours `None` sur plan gratuit (endpoint 404) : non bloquant pour scoring (poids rédistribué). Documenté dans logs.
+- AT-003 — `most_recent_quarter_ts` dérivé de la date IS annuelle (pas trimestrielle) : endpoint earnings-surprises absent. Fraîcheur calculée sur date bilan annuel (~365j). Fenêtre `data_freshness_exclusion_days` ajustée en conséquence.
+
 - **Tâches [P]** (parallélisables) : 42
 - **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches — ✅ complet
-- **v1.1 scope** : T068–T082 (Phase 9) = 15 tâches — 12/15 terminés
+- **v1.1 scope** : T068–T082 (Phase 9) = 15 tâches — 15/15 terminés ✅

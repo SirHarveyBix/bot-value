@@ -105,7 +105,7 @@ Je suis un trader position trading. Chaque matin de bourse (09h35 ET), je reçoi
 **Scénarios d'acceptation** :
 
 1. **Given** marché NYSE ouvert, **When** scan déclenché à 09h35 ET, **Then** message Telegram reçu dans les 15 minutes avec `score_global`, `score_qualite`, `score_valorisation`, `score_momentum` tous non-nuls
-2. **Given** FMP API disponible, **When** 30 tickers shortlistés, **Then** budget FMP ≤ 250 calls (7 endpoints × 30 = 210 nominaux)
+2. **Given** FMP API disponible, **When** 35 tickers shortlistés, **Then** budget FMP ≤ 175 calls (5 endpoints × 35 = 175 nominaux)
 3. **Given** jour férié NYSE, **When** scheduler déclenche, **Then** aucun scan exécuté, aucun message Telegram envoyé
 4. **Given** FMP indisponible (clé absente ou 5xx persistant après 2 retries), **When** scan déclenché, **Then** message Telegram `⚠️ Sniper FMP indisponible` envoyé, aucun signal émis
 5. **Given** message Telegram > 4096 chars, **When** envoi, **Then** message tronqué avec `[message tronqué]` — pas d'erreur API Telegram
@@ -192,7 +192,7 @@ ETFs scorés sur momentum pur (sector rotation), pipeline et section Telegram s�
 - **FR-001** : Le scan DOIT s'exécuter uniquement les jours de bourse NYSE (via `pandas_market_calendars`)
 - **FR-002** : Le Market Gate DOIT évaluer VIX et SPY/EMA200 en priorité absolue avant tout scoring
 - **FR-003** : `yfinance` NE DOIT PAS être utilisé pour ROE, marges, FCF, ou toute donnée bilancielle
-- **FR-004** : FMP DOIT être utilisé pour les 7 endpoints de la shortlist (30 tickers max, 210 calls nominaux)
+- **FR-004** : FMP DOIT être utilisé pour les 5 endpoints de la shortlist (35 tickers max, 175 calls nominaux) — `earnings-surprises` et `analyst-estimates` supprimés (indisponibles plan gratuit)
 - **FR-005** : Si FMP indisponible → Telegram `⚠️ Sniper FMP indisponible` + scan arrêté — aucun fallback yfinance fondamentaux
 - **FR-006** : Scoring Actions = 3 piliers (Qualité 35%, Valorisation 30%, Momentum 35%) avec percentile ranking
 - **FR-007** : Scoring Momentum = 5 critères incluant révision estimations analystes (FMP `analyst-estimates`)
@@ -273,23 +273,23 @@ Pour maximiser l'univers tout en garantissant la qualité institutionnelle des s
 
 > **Contrainte FMP free tier (250 calls/jour) — CRITIQUE** : Le tier gratuit FMP est **limité à 250 appels/jour**, sans possibilité d'upgrade. Budget alloué par run :
 >
-> | Endpoint FMP                               | Appels (30 tickers) | Objet                                              |
-> | ------------------------------------------ | ------------------- | -------------------------------------------------- |
-> | `ratios-ttm/{symbol}`                      | 30                  | P/E, EV/EBITDA, marge op., FCF yield, dette/EBITDA |
-> | `key-metrics-ttm/{symbol}`                 | 30                  | ROE TTM, métriques complémentaires                 |
-> | `profile/{symbol}`                         | 30                  | Secteur GICS, market cap, description              |
-> | `income-statement/{symbol}?limit=3`        | 30                  | ROE moyen 3 ans (annuels)                          |
-> | `balance-sheet-statement/{symbol}?limit=1` | 30                  | Bilan : totalDebt, totalCash                       |
-> | `earnings-surprises/{symbol}`              | 30                  | Surprise Earnings %                                |
-> | `analyst-estimates/{symbol}`               | 30                  | Révision estimations analystes 3M                  |
-> | **Total**                                  | **210 calls/run**   | Marge : 40 calls pour retries ciblés               |
+> | Endpoint FMP (`/stable/`)                         | Appels (35 tickers) | Objet                                              |
+> | ------------------------------------------------- | ------------------- | -------------------------------------------------- |
+> | `ratios-ttm?symbol={symbol}`                      | 35                  | P/E, EV/EBITDA, marge op., FCF yield, dette/EBITDA |
+> | `key-metrics-ttm?symbol={symbol}`                 | 35                  | ROIC TTM, métriques complémentaires                |
+> | `profile?symbol={symbol}`                         | 35                  | Secteur GICS, market cap, description              |
+> | `income-statement?symbol={symbol}&limit=3`        | 35                  | ROE moyen 3 ans (bilans annuels)                   |
+> | `balance-sheet-statement?symbol={symbol}&limit=3` | 35                  | Bilan : totalDebt, totalCash                       |
+> | ~~`earnings-surprises`~~                          | ~~indisponible~~    | 404 plan gratuit — supprimé (BF-010)               |
+> | ~~`analyst-estimates`~~                           | ~~indisponible~~    | 402 plan gratuit — supprimé (BF-010)               |
+> | **Total**                                         | **175 calls/run**   | Budget exact sans marge retries                    |
 >
-> **SHORTLIST_SIZE = 30 est non négociable** : 30 × 7 endpoints = 210 calls nominaux. Avec cache 27h actif sur les tickers non-earnings, les retries ne concernent qu'une minorité. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag, pas de 3ème tentative. Budget réel estimé : 210 calls nominaux + ~15 retries = 225 calls/run. Ne pas dépasser 30 tickers sans audit budget préalable.
+> **SHORTLIST_SIZE = 35 tickers** : 35 × 5 endpoints = 175 calls nominaux. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag. Avec cache 27h actif, les retries concernent une minorité de tickers.
 >
-> **Disjoncteur global FMP (hard limit 245 calls)** : Le système DOIT maintenir un compteur global d'appels FMP par run (`fmp_call_counter`). Dès que ce compteur atteint **245 calls**, les fetches FMP des tickers restants sont interrompus immédiatement. Le scoring et le ranking sont finalisés avec les données disponibles à ce moment. Un flag `⚠️ Budget FMP proche du quota — shortlist partielle` est ajouté au message Telegram. Cette limite de 245 (non 250) conserve 5 calls de marge pour les éventuels retries de notification Telegram et les opérations de fin de run.
+> **Disjoncteur global FMP (hard limit 175 calls)** : Le système DOIT maintenir un compteur global d'appels FMP par run (`fmp_call_counter`). Dès que ce compteur atteint **175 calls**, les fetches FMP des tickers restants sont interrompus immédiatement. Le scoring et le ranking sont finalisés avec les données disponibles à ce moment. Un flag `⚠️ Budget FMP proche du quota — shortlist partielle` est ajouté au message Telegram. Budget exact : 35 tickers × 5 endpoints = 175 calls max (BF-010 : API v3 → stable, 7→5 endpoints).
 >
 > ```python
-> FMP_CALL_BUDGET_HARD_LIMIT = 245  # Disjoncteur — 5 calls de marge sur quota 250
+> FMP_CALL_BUDGET_HARD_LIMIT = 175  # Disjoncteur — 35 tickers × 5 endpoints (BF-010)
 >
 > fmp_call_counter = 0
 >
@@ -1589,7 +1589,7 @@ Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de 
 | `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                     | §3.2         |
 | `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                        | §3bis.2.1    |
 | `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le budget 250 calls            | §2           |
-| `FMP_CALL_BUDGET_HARD_LIMIT`    | 245               | [230, 249] — disjoncteur global, 5 calls de marge sur quota 250   | §2           |
+| `FMP_CALL_BUDGET_HARD_LIMIT`    | 175               | 35 × 5 endpoints = 175 max (BF-010 : migration API stable)        | §2           |
 | `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429          | §3bis.2.1    |
 | `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                          | §3bis.2.1    |
 | `CACHE_TTL_FUNDAMENTALS`        | 97200s (27h)      | [86400, 172800] — **min 27h** pour éviter race condition 09h35    | §3bis.2.4    |
