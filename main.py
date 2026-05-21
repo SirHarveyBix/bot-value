@@ -145,6 +145,7 @@ async def run_scanner(force=False):
         exits_today: list = []
         try:
             import sqlite3 as _sqlite3
+
             with _sqlite3.connect(DB_PATH) as _conn:
                 portfolio, exits_today = reconstruct_portfolio_and_maturation(_conn)
         except Exception as _e:
@@ -154,9 +155,7 @@ async def run_scanner(force=False):
 
         # Gap 1: enrichir top_10_stocks avec first_seen_date depuis SQLite avant notify
         if not top_10_stocks.empty:
-            first_seen_map = get_first_seen_dates_batch(
-                top_10_stocks["symbol"].tolist(), scan_date_str
-            )
+            first_seen_map = get_first_seen_dates_batch(top_10_stocks["symbol"].tolist(), scan_date_str)
             top_10_stocks = top_10_stocks.copy()
             top_10_stocks["first_seen_date"] = top_10_stocks["symbol"].map(first_seen_map)
 
