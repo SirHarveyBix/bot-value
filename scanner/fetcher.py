@@ -122,14 +122,17 @@ async def fetch_prices_batch(tickers, period="1y"):
 
     for idx, chunk in enumerate(chunks):
         try:
-            data = await asyncio.to_thread(
-                yf.download,
-                tickers=" ".join(chunk),
-                period=period,
-                group_by="ticker",
-                auto_adjust=True,
-                progress=False,
-                threads=False,  # Pas de multi-thread interne (amplifie les 429)
+            data = await asyncio.wait_for(
+                asyncio.to_thread(
+                    yf.download,
+                    tickers=" ".join(chunk),
+                    period=period,
+                    group_by="ticker",
+                    auto_adjust=True,
+                    progress=False,
+                    threads=False,  # Pas de multi-thread interne (amplifie les 429)
+                ),
+                timeout=60.0,
             )
             if not data.empty:
                 valid_count = sum(

@@ -34,7 +34,7 @@
 
 - [ ] T008 Créer `data/universe/tickers_universe.json` : clés `stocks` (S&P 500 + Nasdaq 100, ~600 tickers) et `etfs` (SPDR sectoriels : XLK, XLV, XLF, XLY, XLP, XLI, XLE, XLB, XLRE, XLU, XLC + autres ETFs majeurs)
 - [ ] T009 Implémenter `scanner/universe.py` : `build_eligible_universe(tickers, prices_df)` → filtres éligibilité (marketCap > 2B$, volume_dollar_20j > 5M$, price > 5$, listing NYSE/NASDAQ/AMEX, ancienneté > 2 ans d'historique), retourne DataFrame des tickers éligibles
-- [x] T010 Implémenter `scanner/fetcher.py` : `fetch_prices_chunked(tickers, period)` → découpe en chunks `YFINANCE_CHUNK_SIZE`, `yf.download(..., threads=False)`, `asyncio.sleep(YFINANCE_CHUNK_DELAY_S)` entre chunks, log `batch_partial_failure` si chunk < 60% valides
+- [x] T010 Implémenter `scanner/fetcher.py` : `fetch_prices_chunked(tickers, period)` → découpe en chunks `YFINANCE_CHUNK_SIZE`, `yf.download(..., threads=False)`, `asyncio.sleep(YFINANCE_CHUNK_DELAY_S)` entre chunks, log `batch_partial_failure` si chunk < 60% valides — chaque chunk DOIT être wrappé dans `asyncio.wait_for(..., timeout=60.0)` pour éviter épuisement du ThreadPool si Yahoo Finance gèle silencieusement
 - [x] T011 [P] Implémenter `scanner/fetcher.py` : `FMPClient` (`httpx.AsyncClient`, `base_url`, `api_key`), jitter `random.uniform(0.8, 1.5)`, `FMP_MAX_RETRIES=2` avec backoff exponentiel, skip + flag si ticker échoue 2 fois
 - [x] T012 Implémenter `scanner/fetcher.py` : cache fondamentaux 27h (TTL `cache_ttl_fundamentals: 97200` depuis config, champs `fetched_at` via `cache.set`)
 - [x] T013 Implémenter `scanner/fetcher.py` : compteur global `fmp_call_counter = 0`, disjoncteur `if fmp_call_counter + 7 > budget_limit → return None`, reset dans `main.py` à chaque scan
@@ -118,7 +118,7 @@
 - [x] T047 [US4] Ajouter `CREATE TABLE IF NOT EXISTS scanned_universe` dans `scanner/storage.py` (+ INDEX scan_date)
 - [x] T048 [US4] Implémenter `save_scanned_universe(eligible_df, shortlist_symbols, top10_symbols, scan_date)` dans `storage.py`
 - [x] T049 [US4] Câbler `save_scanned_universe` dans `main.py` : après scoring + post-filtering, avant `save_signals`
-- [x] T050 [US4] `update_signal_returns()` implémenté dans `storage.py` (async, yfinance 30j/90j, 0 appel FMP)
+- [x] T050 [US4] `update_signal_returns()` implémenté dans `storage.py` (async, yfinance 30j/90j, 0 appel FMP) — DOIT utiliser le même pattern chunked que `fetch_prices_chunked` (chunks 100 tickers + `asyncio.sleep(2.0)`) pour éviter ban IP 429 à mesure que l'historique grossit
 - [x] T051 [US4] Job APScheduler `update_signal_returns` 18h00 ET dans `main.py`
 - [ ] T052 [P] [US4] Test `tests/test_integration_vcr.py` : 2 scans consécutifs (Freezegun J et J+31) → `first_seen_date` non réinitialisée sur réapparition, `scanned_universe` peuplée, après 31j mock `return_30d` calculé
 

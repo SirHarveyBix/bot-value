@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from datetime import datetime
-from scanner.config import logger
+from scanner.config import CONFIG, logger
 import aiosqlite
 import yfinance as yf
     
@@ -243,38 +243,71 @@ async def update_signal_returns():
         ) as cur:
             rows_90d = await cur.fetchall()
 
-        updated = 0
-        for row_id, symbol, price_at_signal in rows_30d:
-            try:
-                ticker = yf.Ticker(symbol)
-                hist = await asyncio.to_thread(ticker.history, period="1d")
-                if hist.empty:
-                    continue
-                price_now = float(hist["Close"].iloc[-1])
-                return_30d = (price_now - price_at_signal) / price_at_signal
-                await db.execute(
-                    "UPDATE signals SET price_30d_later = ?, return_30d = ? WHERE id = ?",
-                    (price_now, return_30d, row_id)
-                )
-                updated += 1
-            except Exception as e:
-                logger.warning(f"update_signal_returns 30d: erreur pour {symbol}: {e}")
+        chunk_size = CONFIG["scanner"].get("yfinance_chunk_size", 100)
+        chunk_delay = CONFIG["scanner"].get("yfinance_chunk_delay_s", 2.0)
 
+        async def _fetch_prices_batch(rows: list) -> dict[str, float]:
+            """Fetch current prices for a list of (id, symbol, price_at_signal) rows via chunked yf.download."""
+            import pandas as pd
+            prices: dict[str, float] = {}
+            symbols = [r[1] for r in rows]
+            chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+            for idx, chunk in enumerate(chunks):
+                try:
+                    data = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            yf.download,
+                            tickers=" ".join(chunk),
+                            period="2d",
+                            group_by="ticker",
+                            auto_adjust=True,
+                            progress=False,
+                            threads=False,
+                        ),
+                        timeout=60.0,
+                    )
+                    if data.empty:
+                        continue
+                    for sym in chunk:
+                        try:
+                            if isinstance(data.columns, pd.MultiIndex):
+                                close = data[sym]["Close"].dropna()
+                            else:
+                                close = data["Close"].dropna()
+                            if not close.empty:
+                                prices[sym] = float(close.iloc[-1])
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning(f"update_signal_returns batch chunk {idx+1}: {e}")
+                if idx < len(chunks) - 1:
+                    await asyncio.sleep(chunk_delay)
+            return prices
+
+        updated = 0
+        prices_30d = await _fetch_prices_batch(rows_30d)
+        for row_id, symbol, price_at_signal in rows_30d:
+            price_now = prices_30d.get(symbol)
+            if price_now is None:
+                continue
+            return_30d = (price_now - price_at_signal) / price_at_signal
+            await db.execute(
+                "UPDATE signals SET price_30d_later = ?, return_30d = ? WHERE id = ?",
+                (price_now, return_30d, row_id)
+            )
+            updated += 1
+
+        prices_90d = await _fetch_prices_batch(rows_90d)
         for row_id, symbol, price_at_signal in rows_90d:
-            try:
-                ticker = yf.Ticker(symbol)
-                hist = await asyncio.to_thread(ticker.history, period="1d")
-                if hist.empty:
-                    continue
-                price_now = float(hist["Close"].iloc[-1])
-                return_90d = (price_now - price_at_signal) / price_at_signal
-                await db.execute(
-                    "UPDATE signals SET price_90d_later = ?, return_90d = ? WHERE id = ?",
-                    (price_now, return_90d, row_id)
-                )
-                updated += 1
-            except Exception as e:
-                logger.warning(f"update_signal_returns 90d: erreur pour {symbol}: {e}")
+            price_now = prices_90d.get(symbol)
+            if price_now is None:
+                continue
+            return_90d = (price_now - price_at_signal) / price_at_signal
+            await db.execute(
+                "UPDATE signals SET price_90d_later = ?, return_90d = ? WHERE id = ?",
+                (price_now, return_90d, row_id)
+            )
+            updated += 1
 
         await db.commit()
     logger.info(f"Retours 30j/90j mis à jour ({updated} mises à jour sur {len(rows_30d)+len(rows_90d)} signaux).")
