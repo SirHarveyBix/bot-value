@@ -63,6 +63,16 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS api_cache (
+            key TEXT NOT NULL,
+            category TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            data TEXT NOT NULL,
+            PRIMARY KEY (category, key)
+        )
+    """)
+
     # Migration schema — colonnes V1
     for stmt in _NEW_COLS:
         try:
@@ -353,6 +363,7 @@ async def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10
     Anti survivorship bias : permet le backtesting out-of-sample en comparant Top 10 vs univers entier.
     Appelé dans main.py AVANT shortlisting, avec les champs momentum + flags in_shortlist/in_top10.
     """
+    init_db()
     if eligible_df is None or eligible_df.empty:
         return
 
@@ -388,3 +399,109 @@ async def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10
         )
         await db.commit()
     logger.info(f"scanned_universe : {len(rows)} tickers enregistrés pour {scan_date}")
+
+
+def reconstruct_portfolio_and_maturation(conn):
+    """
+    Simule chronologiquement l'histoire des scans SQLite pour tracer le portefeuille :
+      - Un ticker entre dans le portefeuille s'il est au Top 10 (rank <= 10).
+      - Durant ses maturation_days (3 jours) de détention consécutifs, il ne peut pas être vendu (⏳ MATURATION).
+      - À partir de days_held >= maturation_days, il passe en mode normal (HOLD).
+      - Il sort s'il a dépassé la maturation et remplit un critère de sortie :
+        rank > exit_rank_threshold (15) ou score_global < exit_score_threshold (70) (ou s'il est absent du scan).
+
+    Retourne :
+      - current_portfolio : dict {symbol: {
+            "symbol": str,
+            "days_held": int,
+            "status": str,  # 'ACHAT', 'MATURATION', 'HOLD'
+            "rank": int,
+            "score": float,
+            "name": str
+        }}
+      - exits_today : list de dicts représentant les positions sorties lors du dernier scan.
+    """
+    exit_rank_threshold = CONFIG["scanner"].get("exit_rank_threshold", 15)
+    exit_score_threshold = CONFIG["scanner"].get("exit_score_threshold", 70.0)
+    maturation_days = CONFIG["scanner"].get("maturation_days", 3)
+
+    scans_rows = conn.execute("SELECT id, scan_date FROM scans ORDER BY scan_date ASC").fetchall()
+
+    portfolio = {}  # symbol -> {"days_held": int, "last_rank": int, "last_score": float, "name": str}
+    exits_today = []
+
+    for idx, (scan_id, scan_date) in enumerate(scans_rows):
+        is_last_scan = (idx == len(scans_rows) - 1)
+        if is_last_scan:
+            exits_today = []
+
+        # Récupère tous les signaux de type stock pour ce scan
+        signals_rows = conn.execute(
+            "SELECT symbol, rank, score_global, name FROM signals WHERE scan_id = ? AND type = 'stock'",
+            (scan_id,)
+        ).fetchall()
+        scan_signals = {
+            row[0]: {"rank": row[1], "score": row[2], "name": row[3]} for row in signals_rows
+        }
+
+        # 1. Met à jour et incrémente days_held des tickers déjà en portefeuille
+        to_check_exit = list(portfolio.keys())
+        for symbol in to_check_exit:
+            portfolio[symbol]["days_held"] += 1
+            if symbol in scan_signals:
+                portfolio[symbol]["last_rank"] = scan_signals[symbol]["rank"]
+                portfolio[symbol]["last_score"] = scan_signals[symbol]["score"]
+                portfolio[symbol]["name"] = scan_signals[symbol]["name"]
+            else:
+                portfolio[symbol]["last_rank"] = 999
+                portfolio[symbol]["last_score"] = 0.0
+
+            # 2. Vérifie la sortie (exit) : seulement après la période de maturation (strictement supérieur à maturation_days)
+            if portfolio[symbol]["days_held"] > maturation_days:
+                rank = portfolio[symbol]["last_rank"]
+                score = portfolio[symbol]["last_score"]
+                if rank > exit_rank_threshold or score < exit_score_threshold:
+                    ex_data = {
+                        "symbol": symbol,
+                        "name": portfolio[symbol]["name"],
+                        "days_held": portfolio[symbol]["days_held"],
+                        "rank": rank,
+                        "score": score
+                    }
+                    if is_last_scan:
+                        exits_today.append(ex_data)
+                    del portfolio[symbol]
+
+        # 3. Traite les nouveaux achats : Top 10 du scan actuel
+        for symbol, sig in scan_signals.items():
+            if sig["rank"] <= 10:
+                if symbol not in portfolio:
+                    portfolio[symbol] = {
+                        "days_held": 1,
+                        "last_rank": sig["rank"],
+                        "last_score": sig["score"],
+                        "name": sig["name"]
+                    }
+
+    # Construit le résultat final pour le portefeuille actuel
+    current_portfolio = {}
+    for symbol, data in portfolio.items():
+        days = data["days_held"]
+        if days == 1:
+            status = "ACHAT"
+        elif days < maturation_days:
+            status = "MATURATION"
+        else:
+            status = "HOLD"
+
+        current_portfolio[symbol] = {
+            "symbol": symbol,
+            "days_held": days,
+            "status": status,
+            "rank": data["last_rank"],
+            "score": data["last_score"],
+            "name": data["name"]
+        }
+
+    return current_portfolio, exits_today
+

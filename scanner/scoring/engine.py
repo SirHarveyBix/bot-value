@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from scanner.config import CONFIG, logger
+from scanner.filters import sanity_check_gate
 from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, calculate_momentum_metrics
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
@@ -132,6 +133,10 @@ def stock_scoring_pipeline(all_data, symbols):
         info = data["info"]
         prices = data["prices"]
 
+        # Sanity Check Gate (baisse < -45% ou hausse > +50% journalière)
+        if not sanity_check_gate(prices, symbol):
+            continue
+
         # T022: Exclusion sector=None (Lacune 7)
         if info.get("sector") is None:
             logger.warning(f"Exclusion {symbol}: sector=None (sector_missing)")
@@ -215,13 +220,10 @@ def stock_scoring_pipeline(all_data, symbols):
     df["use_cross_universe_ranking"] = df["sector"].isin(small_sectors)
 
     if small_sectors:
-        cross_rank_pe = compute_percentile_ranks(df, "pe", ascending=False)
-        cross_rank_ev = compute_percentile_ranks(df, "ev_ebitda", ascending=False)
-        cross_rank_margin = compute_percentile_ranks(df, "margin")
         mask = df["sector"].isin(small_sectors)
-        df.loc[mask, "rank_pe"] = cross_rank_pe[mask]
-        df.loc[mask, "rank_ev_ebitda"] = cross_rank_ev[mask]
-        df.loc[mask, "rank_margin"] = cross_rank_margin[mask]
+        df.loc[mask, "rank_pe"] = 50.0
+        df.loc[mask, "rank_ev_ebitda"] = 50.0
+        df.loc[mask, "rank_margin"] = 50.0
 
     # Scores qualité
     qw = CONFIG["scoring"]["quality_subweights"]

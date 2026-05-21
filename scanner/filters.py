@@ -66,10 +66,10 @@ def data_freshness_check(ticker_info):
     last_update = datetime.fromtimestamp(last_update_ts)
     age_days = (datetime.now() - last_update).days
 
-    max_age = CONFIG["scanner"].get("max_data_age_days", 180)
-    warning_age = 120
+    max_age = CONFIG["scanner"].get("data_freshness_exclusion_days", 200)
+    warning_age = CONFIG["scanner"].get("data_freshness_warning_days", 120)
 
-    if age_days > max_age:
+    if age_days >= max_age:
         return False, False, f"Données trop vieilles: {age_days} jours"
 
     if age_days > warning_age:
@@ -143,3 +143,27 @@ def check_data_ratio(all_data, eligible_count):
         logger.error(f"Ratio de données valides trop faible: {ratio:.2%} (min {min_ratio:.0%})")
         return False
     return True
+
+
+def sanity_check_gate(prices_df, symbol: str) -> bool:
+    """
+    Vérifie si le ticker présente des variations journalières anormales (baisse < -45% ou hausse > +50%).
+    Utile pour écarter les anomalies de prix et les stock splits non ajustés.
+    """
+    if prices_df is None or prices_df.empty or "Close" not in prices_df.columns:
+        return True
+
+    # Calcul du rendement quotidien (daily returns)
+    daily_returns = prices_df["Close"].pct_change().dropna()
+    if daily_returns.empty:
+        return True
+
+    # Exclut si en dehors de [-45%, +50%]
+    if (daily_returns < -0.45).any() or (daily_returns > 0.50).any():
+        logger.warning(
+            f"Sanity Check Gate: Ticker {symbol} exclu pour variation journalière anormale "
+            f"(min: {daily_returns.min():.2%}, max: {daily_returns.max():.2%})"
+        )
+        return False
+    return True
+

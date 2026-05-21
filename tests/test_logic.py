@@ -480,6 +480,8 @@ def test_intra_sector_fallback():
 
     if not result.empty:
         assert result["use_cross_universe_ranking"].all()
+        for col in ["rank_pe", "rank_ev_ebitda", "rank_margin"]:
+            assert (result[col] == 50.0).all()
 
 
 # T039
@@ -884,3 +886,112 @@ def test_momentum_adj_flat_price_uses_floor():
     # perf_6m = 0 car prix constant
     assert metrics.get("momentum_adj") is not None
     assert metrics["momentum_adj"] == 0.0  # 0 / FLOOR = 0
+
+
+# ── sanity_check_gate ────────────────────────────────────────────────────────
+
+
+def test_sanity_check_gate():
+    """Vérifie que la barrière exclut les tickers avec des variations > 50% ou < -45%."""
+    from scanner.filters import sanity_check_gate
+
+    # Cas valide
+    valid_prices = pd.DataFrame({"Close": [10.0, 10.5, 11.0, 10.8, 11.2]})
+    assert sanity_check_gate(valid_prices, "VALID")
+
+    # Cas de baisse excessive (-50% en un jour)
+    drop_prices = pd.DataFrame({"Close": [10.0, 10.5, 5.0, 5.2, 5.3]})
+    assert not sanity_check_gate(drop_prices, "CRASH")
+
+    # Cas de hausse excessive (+60% en un jour)
+    rise_prices = pd.DataFrame({"Close": [10.0, 9.8, 16.0, 15.5, 15.8]})
+    assert not sanity_check_gate(rise_prices, "PUMP")
+
+
+# ── Portfolio maturation & hysteresis exits ─────────────────────────────────
+
+
+def test_portfolio_maturation_and_hysteresis(tmp_path):
+    """Vérifie le cycle de maturation de 3 jours et la sortie par hystérésis."""
+    import sqlite3
+    from unittest.mock import patch
+    from scanner.storage import reconstruct_portfolio_and_maturation
+
+    db_path = str(tmp_path / "test_portfolio.db")
+
+    # On coince le chemin de la base de données de stockage
+    with patch("scanner.storage.DB_PATH", db_path):
+        from scanner.storage import init_db
+        init_db()
+
+        conn = sqlite3.connect(db_path)
+
+        # Jour 1 (Achat de AAPL au Top 10)
+        conn.execute("INSERT INTO scans (scan_date, market_regime, eligible_count) VALUES ('2026-05-18', 'normal', 1)")
+        scan1_id = conn.execute("SELECT id FROM scans WHERE scan_date = '2026-05-18'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
+            "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 2, 85.0)",
+            (scan1_id,)
+        )
+        conn.commit()
+
+        portfolio, exits = reconstruct_portfolio_and_maturation(conn)
+        assert "AAPL" in portfolio
+        assert portfolio["AAPL"]["status"] == "ACHAT"
+        assert portfolio["AAPL"]["days_held"] == 1
+        assert len(exits) == 0
+
+        # Jour 2 (AAPL sort du Top 10 mais est toujours protégé par la maturation)
+        conn.execute("INSERT INTO scans (scan_date, market_regime, eligible_count) VALUES ('2026-05-19', 'normal', 1)")
+        scan2_id = conn.execute("SELECT id FROM scans WHERE scan_date = '2026-05-19'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
+            "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 12, 76.0)",
+            (scan2_id,)
+        )
+        conn.commit()
+
+        portfolio, exits = reconstruct_portfolio_and_maturation(conn)
+        assert "AAPL" in portfolio
+        assert portfolio["AAPL"]["status"] == "MATURATION"
+        assert portfolio["AAPL"]["days_held"] == 2
+        assert len(exits) == 0
+
+        # Jour 3 (AAPL est hors du Top 10 mais toujours protégé car c'est le 3ème scan)
+        conn.execute("INSERT INTO scans (scan_date, market_regime, eligible_count) VALUES ('2026-05-20', 'normal', 1)")
+        scan3_id = conn.execute("SELECT id FROM scans WHERE scan_date = '2026-05-20'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
+            "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 16, 72.0)",
+            (scan3_id,)
+        )
+        conn.commit()
+
+        portfolio, exits = reconstruct_portfolio_and_maturation(conn)
+        assert "AAPL" in portfolio
+        assert portfolio["AAPL"]["status"] == "HOLD"  # 3 scans = HOLD
+        assert portfolio["AAPL"]["days_held"] == 3
+        assert len(exits) == 0
+
+        # Jour 4 (AAPL n'est plus protégé et remplit les conditions de sortie : rank > 15)
+        conn.execute("INSERT INTO scans (scan_date, market_regime, eligible_count) VALUES ('2026-05-21', 'normal', 1)")
+        scan4_id = conn.execute("SELECT id FROM scans WHERE scan_date = '2026-05-21'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
+            "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 17, 68.0)",
+            (scan4_id,)
+        )
+        conn.commit()
+
+        portfolio, exits = reconstruct_portfolio_and_maturation(conn)
+        assert "AAPL" not in portfolio
+        assert len(exits) == 1
+        assert exits[0]["symbol"] == "AAPL"
+        assert exits[0]["days_held"] == 4
+        assert exits[0]["rank"] == 17
+        assert exits[0]["score"] == 68.0
+
+        conn.close()
+
+
