@@ -1,9 +1,24 @@
+import io
 import json
 import os
 
 import pandas as pd
+import requests
 
 from scanner.config import logger
+
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; bot-value/1.0)"}
+
+
+def _fetch_html(url: str) -> str | None:
+    """Récupère le HTML d'une URL avec User-Agent (évite le 403 Wikipedia)."""
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=15)
+        resp.raise_for_status()
+        return resp.text
+    except Exception as e:
+        logger.error(f"Erreur HTTP {url}: {e}")
+        return None
 
 
 def refresh_sp500():
@@ -11,18 +26,18 @@ def refresh_sp500():
     Récupère la liste à jour des entreprises du S&P 500 depuis Wikipedia.
     """
     logger.info("Récupération de la liste S&P 500 depuis Wikipedia...")
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    html = _fetch_html(url)
+    if not html:
+        return []
     try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        tables = pd.read_html(url)
+        tables = pd.read_html(io.StringIO(html))
         sp500_df = tables[0]
-
-        # Nettoyage des symboles (certains utilisent '.' au lieu de '-')
         tickers = sp500_df["Symbol"].str.replace(".", "-", regex=False).tolist()
-
         logger.info(f"{len(tickers)} tickers récupérés pour le S&P 500.")
         return tickers
     except Exception as e:
-        logger.error(f"Erreur lors de la récupération du S&P 500: {e}")
+        logger.error(f"Erreur parsing S&P 500: {e}")
         return []
 
 
@@ -64,12 +79,14 @@ def refresh_nifty50():
     Récupère le NIFTY 50 (Inde) depuis Wikipedia.
     """
     logger.info("Récupération du NIFTY 50 (Inde)...")
+    url = "https://en.wikipedia.org/wiki/NIFTY_50"
+    html = _fetch_html(url)
+    if not html:
+        return []
     try:
-        url = "https://en.wikipedia.org/wiki/NIFTY_50"
-        tables = pd.read_html(url)
-        # Wikipedia table index might change, usually it's the 1st or 2nd
+        tables = pd.read_html(io.StringIO(html))
         df = tables[1]
-        tickers = [f"{s}.NS" for s in df["Symbol"].tolist()]  # Format Yahoo pour l'Inde
+        tickers = [f"{s}.NS" for s in df["Symbol"].tolist()]
         return tickers
     except Exception as e:
         logger.error(f"Erreur NIFTY 50: {e}")
@@ -81,8 +98,11 @@ def refresh_from_url(url, column_name="Symbol"):
     Méthode générique pour extraire des tickers d'une table HTML (ex: Wikipedia).
     """
     logger.info(f"Extraction de tickers depuis {url}...")
+    html = _fetch_html(url)
+    if not html:
+        return []
     try:
-        tables = pd.read_html(url)
+        tables = pd.read_html(io.StringIO(html))
         for df in tables:
             if column_name in df.columns:
                 return df[column_name].tolist()
