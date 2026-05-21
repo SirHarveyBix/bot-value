@@ -102,25 +102,38 @@ def momentum_screening_pipeline(price_data, symbols):
 def compute_valuation_score(row):
     vw = CONFIG["scoring"]["valuation_subweights"]
 
-    v_ranks = [row["rank_pe"], row["rank_ev_ebitda"], row["rank_peg"]]
-    nan_count = sum(1 for r in v_ranks if pd.isna(r))
+    rank_pe = row["rank_pe"]
+    rank_ev = row["rank_ev_ebitda"]
+    rank_peg = row["rank_peg"]
 
-    if nan_count >= 2:
+    pe_ok = pd.notna(rank_pe)
+    ev_ok = pd.notna(rank_ev)
+    peg_ok = pd.notna(rank_peg)
+
+    # Spec: repondération 50/50 seulement si P/E ET EV/EBITDA tous les deux absents
+    if not pe_ok and not ev_ok:
         return None, False
 
-    if pd.isna(row["rank_peg"]):
-        v_score = (row["rank_pe"] or 0) * 0.56 + (row["rank_ev_ebitda"] or 0) * 0.44
-    else:
-        v_score = (
-            (row["rank_pe"] or 0) * vw["pe_forward"]
-            + (row["rank_ev_ebitda"] or 0) * vw["ev_ebitda"]
-            + (row["rank_peg"] or 0) * vw["peg"]
-        )
+    # Score pondéré sur les rangs disponibles, renormalisé à l'échelle totale
+    used_w = 0.0
+    score = 0.0
+    if pe_ok:
+        score += rank_pe * vw["pe_forward"]
+        used_w += vw["pe_forward"]
+    if ev_ok:
+        score += rank_ev * vw["ev_ebitda"]
+        used_w += vw["ev_ebitda"]
+    if peg_ok:
+        score += rank_peg * vw["peg"]
+        used_w += vw["peg"]
+
+    full_w = vw["pe_forward"] + vw["ev_ebitda"] + vw["peg"]
+    v_score = (score / used_w) * full_w if used_w > 0 else 0.0
 
     if pd.notna(row.get("pe_flag")):
         v_score -= 5
 
-    return max(0, v_score), True
+    return max(0.0, v_score), True
 
 
 def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None):
@@ -255,14 +268,18 @@ def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None
         df.loc[mask, "rank_ev_ebitda"] = cross_rank_ev[mask]
         df.loc[mask, "rank_margin"] = cross_rank_margin[mask]
 
-    # Scores qualité
+    # Scores qualité — secteurs atypiques (Financials/Real Estate/Utilities) : 3 critères
+    # renormalisés à 100% (pas de dette/EBITDA → 10% de poids ne doit pas être gaspillé)
     qw = CONFIG["scoring"]["quality_subweights"]
-    df["score_quality"] = (
+    _denom_no_debt = qw["roe"] + qw["margin"] + qw["fcf_yield"]  # 0.90
+    _score_3 = (
         df["rank_roe"].fillna(0) * qw["roe"]
         + df["rank_margin"].fillna(0) * qw["margin"]
         + df["rank_fcf"].fillna(0) * qw["fcf_yield"]
-        + df["rank_debt"].fillna(0) * qw["debt_ebitda"]
     )
+    _score_4 = _score_3 + df["rank_debt"].fillna(0) * qw["debt_ebitda"]
+    _atypical = df["sector"].isin({"Financials", "Real Estate", "Utilities"})
+    df["score_quality"] = _score_4.where(~_atypical, _score_3 / _denom_no_debt)
 
     v_results = df.apply(compute_valuation_score, axis=1)
     df["score_valuation"] = v_results.apply(lambda x: x[0])
@@ -272,14 +289,19 @@ def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None
     base_mw = CONFIG["scoring"]["momentum_subweights"]
     today = _date.today()
 
+    def _sv(val):
+        """NaN/None → 0.0 (safe value pour calculs pondérés)."""
+        return 0.0 if (val is None or pd.isna(val)) else float(val)
+
     def _row_momentum_score(row):
         w = compute_momentum_weights(row.get("surprise_date"), base_mw, today)
+        rank_mom = row.get("rank_momentum_adj", row.get("rank_perf_6m"))
         return (
-            row.get("rank_momentum_adj", row.get("rank_perf_6m", 0)) * w["perf_6m"]
-            + (row.get("rank_outperf_6m") or 0) * w["outperf_6m"]
-            + (row.get("rank_perf_3m") or 0) * w["perf_3m"]
-            + row.get("rank_surprise", 0) * w["surprise_earnings"]
-            + (row.get("rank_analyst_revision") or 0) * w.get("analyst_revision", 0)
+            _sv(rank_mom) * w["perf_6m"]
+            + _sv(row.get("rank_outperf_6m")) * w["outperf_6m"]
+            + _sv(row.get("rank_perf_3m")) * w["perf_3m"]
+            + _sv(row.get("rank_surprise")) * w["surprise_earnings"]
+            + _sv(row.get("rank_analyst_revision")) * w.get("analyst_revision", 0)
         )
 
     df["score_momentum"] = df.apply(_row_momentum_score, axis=1)
@@ -299,6 +321,8 @@ def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None
         ),
         axis=1,
     )
+    # Garantie spec SC-003 : score_global ∈ [0, 100], jamais NaN
+    df["score_global"] = df["score_global"].fillna(0.0).clip(0.0, 100.0)
     return df.sort_values("score_global", ascending=False)
 
 

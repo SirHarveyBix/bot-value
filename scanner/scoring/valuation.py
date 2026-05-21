@@ -6,22 +6,14 @@ def calculate_valuation_metrics(ticker_info):
     Extrait les métriques de valorisation.
     """
     try:
-        pe_fwd = ticker_info.get("forwardPE")
-        pe_ttm = ticker_info.get("trailingPE")
+        # forwardPE contient priceToEarningsRatioTTM (FMP stable — clé nommée pe_ttm en interne)
+        pe_used = ticker_info.get("forwardPE")
         ev_ebitda = ticker_info.get("enterpriseToEbitda")
         peg = ticker_info.get("pegRatio")
         sector = ticker_info.get("sector")
         mcap = ticker_info.get("marketCap", 0)
 
-        # Fallback P/E
-        pe_used = pe_fwd
-        pe_flag = None
-        if pe_used is None or pe_used <= 0:
-            if pe_ttm and pe_ttm > 0:
-                pe_used = pe_ttm
-                pe_flag = "P/E TTM used as fallback"
-
-        return {"pe": pe_used, "ev_ebitda": ev_ebitda, "peg": peg, "sector": sector, "mcap": mcap, "pe_flag": pe_flag}
+        return {"pe": pe_used, "ev_ebitda": ev_ebitda, "peg": peg, "sector": sector, "mcap": mcap, "pe_flag": None}
     except Exception as e:
         logger.error(f"Erreur calcul métriques valorisation: {e}")
         return None
@@ -41,9 +33,11 @@ def apply_valuation_gates(metrics):
     # On suspend le gate P/E négatif
     is_biotech_exception = sector == "Health Care" and mcap < 5_000_000_000
 
-    # Cas : Pas de P/E disponible
+    # Cas : P/E absent — spec §T028 : repondération 50/50 seulement si EV/EBITDA aussi absent
     if pe is None:
-        return False, False, "P/E manquant"
+        if ev_ebitda is None or ev_ebitda <= 0:
+            return False, False, "P/E et EV/EBITDA absents"
+        return False, True, "P/E manquant (EV/EBITDA disponible)"
 
     # Cas : P/E négatif
     if pe <= 0:

@@ -45,35 +45,35 @@ def test_quality_logic():
     assert not ok_no_roe
     assert "ROE 3 ans indisponible" in reason_no_roe
 
-    # Gate: EBITDA <= 0
+    # Gate: EBITDA <= 0 — ticker_info doit avoir roe_3y pour passer le gate ROE d'abord
     metrics["ebitda"] = 0
-    ok, reason, _ = apply_quality_gates(metrics)
+    ok, reason, _ = apply_quality_gates(metrics, ticker_info={"roe_3y": 0.20})
     assert not ok
     assert "EBITDA négatif ou nul" in reason
 
-    # Gate: ROE négatif
+    # Gate: ROE négatif — roe_3y brut (pas le composite) utilisé pour la gate
     metrics["ebitda"] = 25
     metrics["roe"] = -0.05
-    ok, reason, _ = apply_quality_gates(metrics)
+    ok, reason, _ = apply_quality_gates(metrics, ticker_info={"roe_3y": -0.05})
     assert not ok
     assert "ROE négatif" in reason
 
     # Gate: Dette trop élevée
     metrics["roe"] = 0.20
     metrics["debt_ebitda"] = 7.0
-    ok, reason, _ = apply_quality_gates(metrics)
+    ok, reason, _ = apply_quality_gates(metrics, ticker_info={"roe_3y": 0.20})
     assert not ok
     assert "Dette/EBITDA trop élevé" in reason
 
     # Gate: book_value_per_share <= 0 → exclu
     metrics["debt_ebitda"] = 2.0
-    ok, reason, _ = apply_quality_gates(metrics, ticker_info={"bookValuePerShare": -1.0})
+    ok, reason, _ = apply_quality_gates(metrics, ticker_info={"bookValuePerShare": -1.0, "roe_3y": 0.20})
     assert not ok
     assert "book_value_per_share" in reason
 
-    # Flag: ROE > 150% avec BVS < 5$ → non exclu, flag + cap
+    # Flag: ROE > 150% avec BVS < 5$ → non exclu, flag + cap (roe_3y brut pour le flag)
     metrics["roe"] = 1.60
-    ok, reason, flags = apply_quality_gates(metrics, ticker_info={"bookValuePerShare": 2.5})
+    ok, reason, flags = apply_quality_gates(metrics, ticker_info={"bookValuePerShare": 2.5, "roe_3y": 1.60})
     assert ok
     assert any("gonflé par buybacks" in f for f in flags)
     assert metrics.get("roe_capped") is True
@@ -183,7 +183,8 @@ def test_global_score_weights():
     assert score == (80 + 90) / 2
 
 
-def test_sector_diversification():
+@pytest.mark.asyncio
+async def test_sector_diversification():
     rows = []
     all_data = {}
     # 4 secteurs pour pouvoir remplir un top 10 (3+3+3+1)
@@ -196,12 +197,13 @@ def test_sector_diversification():
         rows.append({"symbol": symbol, "sector": sectors[i % 4], "score_global": 100 - i})
         all_data[symbol] = {
             "info": {
-                "lastFiscalYearEnd": now,  # Très récent
                 "mostRecentQuarter": now,
             }
         }
     df = pd.DataFrame(rows)
-    top_10 = filter_post_scoring(df, all_data)
+
+    with patch("scanner.filters.earnings_calendar_check", return_value=None):
+        top_10 = await filter_post_scoring(df, all_data)
 
     assert len(top_10) == 10
     # Aucun secteur ne doit dépasser 3
@@ -223,7 +225,7 @@ def test_sector_exceptions():
     metrics = calculate_quality_metrics(info_fin)
     # Dans Financials, debt_ebitda doit être None
     assert metrics["debt_ebitda"] is None
-    ok, _, _flags = apply_quality_gates(metrics)
+    ok, _, _flags = apply_quality_gates(metrics, ticker_info=info_fin)
     assert ok  # Ne doit pas être exclu par la dette
 
     # Test 1b: Utilities excluded from debt gate (nouvelle règle §4.4)
@@ -237,7 +239,7 @@ def test_sector_exceptions():
     }
     metrics_util = calculate_quality_metrics(info_util)
     assert metrics_util["debt_ebitda"] is None, "Utilities doit être exclu du calcul dette/EBITDA"
-    ok_util, _, _flags_util = apply_quality_gates(metrics_util)
+    ok_util, _, _flags_util = apply_quality_gates(metrics_util, ticker_info=info_util)
     assert ok_util, "Utilities ne doit pas être exclu malgré le fort levier structurel"
 
     # Test 2: Biotech exception for negative P/E
@@ -252,11 +254,11 @@ def test_sector_exceptions():
     assert not is_excluded
     assert not v_ok
 
-    # Test 3: P/E TTM fallback penalty flag
-    info_ttm = {"forwardPE": None, "trailingPE": 15, "sector": "Technology"}
+    # Test 3: forwardPE absent → pe=None (trailingPE non utilisé — jamais peuplé par FMP)
+    info_ttm = {"forwardPE": None, "sector": "Technology"}
     v_metrics = calculate_valuation_metrics(info_ttm)
-    assert v_metrics["pe"] == 15
-    assert v_metrics["pe_flag"] == "P/E TTM used as fallback"
+    assert v_metrics["pe"] is None
+    assert v_metrics["pe_flag"] is None
 
 
 def test_valuation_score_calculation():
@@ -269,12 +271,12 @@ def test_valuation_score_calculation():
     assert ok
     assert score == 71.0
 
-    # Cas 2 : PEG absent (Redistribution 56/44)
+    # Cas 2 : PEG absent (renormalisation sur pe+ev_ebitda uniquement)
     row_no_peg = pd.Series({"rank_pe": 80, "rank_ev_ebitda": 60, "rank_peg": None, "pe_flag": None})
     score, ok = compute_valuation_score(row_no_peg)
-    # 80*0.56 + 60*0.44 = 44.8 + 26.4 = 71.2
+    # (80*0.45 + 60*0.35) / (0.45+0.35) * 1.0 = 57/0.80 = 71.25
     assert ok
-    assert score == 71.2
+    assert abs(score - 71.25) < 1e-9
 
     # Cas 3 : P/E TTM fallback (Pénalité -5)
     row_ttm = pd.Series({"rank_pe": 80, "rank_ev_ebitda": 60, "rank_peg": 70, "pe_flag": "P/E TTM used as fallback"})
@@ -282,8 +284,8 @@ def test_valuation_score_calculation():
     assert ok
     assert score == 66.0  # 71 - 5
 
-    # Cas 4 : Trop de NaNs (Exclusion pilier)
-    row_nan = pd.Series({"rank_pe": 80, "rank_ev_ebitda": None, "rank_peg": None, "pe_flag": None})
+    # Cas 4 : P/E ET EV/EBITDA absents → exclusion pilier (repondération 50/50)
+    row_nan = pd.Series({"rank_pe": None, "rank_ev_ebitda": None, "rank_peg": 70, "pe_flag": None})
     score, ok = compute_valuation_score(row_nan)
     assert not ok
     assert score is None
@@ -666,33 +668,36 @@ def test_check_data_ratio_zero_eligible():
 # ── earnings_calendar_check ───────────────────────────────────────────────────
 
 
-def test_earnings_calendar_none():
+@pytest.mark.asyncio
+async def test_earnings_calendar_none():
     """ticker.calendar=None → retourne None sans exception."""
     mock_ticker = MagicMock()
     mock_ticker.calendar = None
     with patch("scanner.filters.yf.Ticker", return_value=mock_ticker):
-        assert earnings_calendar_check("AAPL") is None
+        assert await earnings_calendar_check("AAPL") is None
 
 
+@pytest.mark.asyncio
 @freeze_time("2026-05-19")
-def test_earnings_calendar_soon():
+async def test_earnings_calendar_soon():
     """Earnings dans 7j → retourne la date formatée."""
     next_date = datetime(2026, 5, 26)
     mock_ticker = MagicMock()
     mock_ticker.calendar = {"Earnings Date": [next_date]}
     with patch("scanner.filters.yf.Ticker", return_value=mock_ticker):
-        result = earnings_calendar_check("AAPL")
+        result = await earnings_calendar_check("AAPL")
     assert result == "2026-05-26"
 
 
+@pytest.mark.asyncio
 @freeze_time("2026-05-19")
-def test_earnings_calendar_far_future():
+async def test_earnings_calendar_far_future():
     """Earnings dans 30j → hors fenêtre 14j → retourne None."""
     next_date = datetime(2026, 6, 18)
     mock_ticker = MagicMock()
     mock_ticker.calendar = {"Earnings Date": [next_date]}
     with patch("scanner.filters.yf.Ticker", return_value=mock_ticker):
-        result = earnings_calendar_check("AAPL")
+        result = await earnings_calendar_check("AAPL")
     assert result is None
 
 
@@ -1271,7 +1276,8 @@ def test_truncate_message_html_safe_nested_tags():
 # ── filter_post_scoring — exclusion données stale ────────────────────────────
 
 
-def test_filter_post_scoring_stale_data_excluded():
+@pytest.mark.asyncio
+async def test_filter_post_scoring_stale_data_excluded():
     """Ticker avec données vieilles de 201j → exclu du top 10 (data_freshness_check False)."""
     import time as _time
 
@@ -1289,7 +1295,8 @@ def test_filter_post_scoring_stale_data_excluded():
         "FRESH": {"info": {"mostRecentQuarter": fresh_ts}},
     }
     df = pd.DataFrame(rows)
-    result = filter_post_scoring(df, all_data)
+    with patch("scanner.filters.earnings_calendar_check", return_value=None):
+        result = await filter_post_scoring(df, all_data)
     symbols = result["symbol"].tolist()
     assert "STALE" not in symbols
     assert "FRESH" in symbols

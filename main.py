@@ -75,6 +75,10 @@ async def run_scanner(force=False):
             logger.info(
                 f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}"
             )
+        else:
+            logger.error("Indices marché indisponibles (DataFrame vide) — scan annulé.")
+            await notify_vix_unavailable()
+            return
 
         market_regime = regime.value
 
@@ -131,7 +135,7 @@ async def run_scanner(force=False):
         ranked_etfs_df = etf_scoring_pipeline(all_data, initial_etfs)
 
         # 7. Post-Scoring Filters
-        top_10_stocks = filter_post_scoring(ranked_stocks_df, all_data, exclusions_out=exclusions)
+        top_10_stocks = await filter_post_scoring(ranked_stocks_df, all_data, exclusions_out=exclusions)
         top_5_etfs = ranked_etfs_df.head(5)
 
         # T049: Anti survivorship bias — stocker univers Chalutier complet
@@ -148,8 +152,12 @@ async def run_scanner(force=False):
         portfolio: dict = {}
         exits_today: list = []
         try:
-            with sqlite3.connect(DB_PATH) as _conn:
-                portfolio, exits_today = reconstruct_portfolio_and_maturation(_conn)
+
+            def _reconstruct_sync():
+                with sqlite3.connect(DB_PATH) as _conn:
+                    return reconstruct_portfolio_and_maturation(_conn)
+
+            portfolio, exits_today = await asyncio.to_thread(_reconstruct_sync)
         except Exception as _e:
             logger.warning(f"Impossible de reconstruire le portefeuille: {_e}")
 
@@ -163,7 +171,7 @@ async def run_scanner(force=False):
 
         # 9. Notify — En cas de panique (VIX > 35), on envoie uniquement le message de crise (Silent Scan)
         # Sinon on envoie les signaux normaux enrichis du portefeuille et des sorties
-        if market_regime == "panic":
+        if regime == MarketRegime.PANIC:
             await notify_panic(current_vix, current_spy, ema200)
         else:
             await notify(

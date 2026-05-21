@@ -9,8 +9,6 @@ import yfinance as yf
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
 
-TTL_FUNDAMENTALS = 24 * 3600
-
 EXCLUDED_ETF_PATTERNS = [
     "3X",
     "2X",
@@ -90,8 +88,9 @@ def get_eligibility_filters(ticker_info):
 def _check_single_ticker(symbol):
     """Fonction helper pour le filtrage parallèle."""
     try:
-        # Tenter de récupérer depuis le cache d'abord
-        info = cache.get("fundamentals", symbol, TTL_FUNDAMENTALS)
+        # Tenter de récupérer depuis le cache d'abord (TTL depuis config — cohérence avec fetcher.py)
+        _ttl = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)
+        info = cache.get("fundamentals", symbol, _ttl)
         if not info:
             delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
             if delay > 0:

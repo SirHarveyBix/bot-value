@@ -48,13 +48,15 @@ def apply_quality_gates(metrics, ticker_info=None):
     Vérifie si le ticker passe les filtres d'exclusion Qualité (Section 4.1).
     Retourne (passed: bool, reason: str | None, flags: list[str])
     """
-    roe = metrics.get("roe")
+    # roe_3y brut utilisé pour les gates (pas le composite 0.6×roe + 0.4×roic)
+    # Le composite est réservé au ranking percentile dans engine.py
+    roe_3y = (ticker_info or {}).get("roe_3y")
     debt_ebitda = metrics.get("debt_ebitda")
     ebitda = metrics.get("ebitda")
     flags = []
 
     # Gate: ROE 3 ans absent → FMP n'a pas fourni le calcul (TTM proscrit)
-    if roe is None:
+    if roe_3y is None:
         return False, "ROE 3 ans indisponible (non calculable sans FMP)", flags
 
     # Gate: EBITDA <= 0 exclu
@@ -66,12 +68,12 @@ def apply_quality_gates(metrics, ticker_info=None):
     if bvps is not None and bvps <= 0:
         return False, "book_value_per_share <= 0 (ROE non interprétable)", flags
 
-    # Gate: ROE négatif exclu
-    if roe < 0:
+    # Gate: ROE négatif exclu (roe_3y brut, pas le composite)
+    if roe_3y < 0:
         return False, "ROE négatif", flags
 
     # Flag: ROE > 150% avec book_value < 5$ → probable gonflement par buybacks
-    if roe > 1.50 and bvps is not None and bvps < 5.0:
+    if roe_3y > 1.50 and bvps is not None and bvps < 5.0:
         flags.append("⚠️ ROE possiblement gonflé par buybacks")
         metrics["roe_capped"] = True  # engine.py plafonne le percentile à 80
 

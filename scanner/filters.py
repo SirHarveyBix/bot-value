@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 
 import pandas as pd
@@ -6,7 +7,7 @@ import yfinance as yf
 from scanner.config import CONFIG, logger
 
 
-def filter_post_scoring(df, all_data, exclusions_out: list | None = None):
+async def filter_post_scoring(df, all_data, exclusions_out: list | None = None):
     """
     Applique les filtres de diversification sectorielle et enrichit avec l'earnings calendar.
     """
@@ -45,7 +46,7 @@ def filter_post_scoring(df, all_data, exclusions_out: list | None = None):
 
                 # 3. Earnings Calendar check (Section 5.2)
                 row_copy = row.copy()
-                earnings_date = earnings_calendar_check(symbol)
+                earnings_date = await earnings_calendar_check(symbol)
                 if earnings_date:
                     row_copy["earnings_date"] = earnings_date
 
@@ -76,8 +77,8 @@ def data_freshness_check(ticker_info):
     if not ticker_info:
         return False, False, "No info"
 
-    # yfinance 'lastFiscalYearEnd' ou 'mostRecentQuarter'
-    last_update_ts = ticker_info.get("lastFiscalYearEnd") or ticker_info.get("mostRecentQuarter")
+    # mostRecentQuarter = timestamp FMP (is_data[0].date) — seule source valide
+    last_update_ts = ticker_info.get("mostRecentQuarter")
     if not last_update_ts:
         return True, True, "Date de mise à jour inconnue"
 
@@ -96,13 +97,17 @@ def data_freshness_check(ticker_info):
     return True, False, None
 
 
-def earnings_calendar_check(symbol):
+async def earnings_calendar_check(symbol):
     """
     Récupère la prochaine date de résultats (Section 5.2).
+    yfinance.calendar = appel blocking → wrappé dans asyncio.to_thread.
     """
     try:
-        ticker = yf.Ticker(symbol)
-        calendar = ticker.calendar
+
+        def _fetch():
+            return yf.Ticker(symbol).calendar
+
+        calendar = await asyncio.to_thread(_fetch)
         if calendar is None:
             return None
 

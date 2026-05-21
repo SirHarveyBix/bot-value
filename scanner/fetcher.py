@@ -252,7 +252,7 @@ async def fetch_fmp_data(client, symbol):
         p_item = p_data[0] if isinstance(p_data, list) else p_data
 
         # earnings-surprises (404) et analyst-estimates (402) indisponibles sur plan gratuit stable
-        surprise_pct = 0.0
+        surprise_pct = None  # None = inconnu, pas "pas de surprise"
         surprise_date = None
         analyst_revision_3m = None
 
@@ -278,14 +278,13 @@ async def fetch_fmp_data(client, symbol):
                 if te and te > 0:
                     roes.append(ni / te)
             if roes:
+                if len(roes) < 3:
+                    logger.warning(
+                        f"ROE calculé sur {len(roes)}/3 bilans annuels pour {symbol} (données FMP partielles)"
+                    )
                 roe_3y = sum(roes) / len(roes)
         else:
             logger.debug(f"FMP IS/BS vide ou non-liste pour {symbol}")
-
-        # Fallback : IS annuel vide → ROE TTM key-metrics comme proxy
-        if roe_3y is None and k.returnOnEquityTTM is not None:
-            roe_3y = k.returnOnEquityTTM
-            logger.debug(f"ROE TTM fallback pour {symbol} (IS vide)")
 
         # netDebt, ebitda, totalDebt depuis IS/BS (absents de key-metrics-ttm stable)
         net_debt = bs_data[0].get("netDebt") if bs_list and len(bs_data) > 0 else None
@@ -349,10 +348,14 @@ async def fetch_market_indices():
     """Récupère l'historique du SPY et du VIX pour le Market Gate."""
     logger.info("Récupération du SPY et du VIX pour le Market Gate...")
     try:
-        indices = await asyncio.to_thread(
-            yf.download, tickers="SPY ^VIX", period="2y", progress=False, auto_adjust=True
+        indices = await asyncio.wait_for(
+            asyncio.to_thread(yf.download, tickers="SPY ^VIX", period="2y", progress=False, auto_adjust=True),
+            timeout=60.0,
         )
         return indices
+    except asyncio.TimeoutError:
+        logger.error("Timeout fetch indices marché (60s) — DataFrame vide retourné")
+        return pd.DataFrame()
     except Exception as e:
         logger.error(f"Erreur fetch indices marché: {e}")
         return pd.DataFrame()
