@@ -1167,3 +1167,173 @@ def test_score_global_bounds():
         score = row["score_global"]
         assert not np.isnan(score), f"score_global NaN pour {row['symbol']}"
         assert 0.0 <= score <= 100.0, f"score_global hors bornes [{score}] pour {row['symbol']}"
+
+
+# ── normalize_sector_name ─────────────────────────────────────────────────────
+
+
+def test_normalize_sector_name_mappings():
+    """Vérifie les mappings critiques yfinance → SECTOR_ETF_MAP (Financial Services, Healthcare…)."""
+    from scanner.fetcher import normalize_sector_name
+
+    assert normalize_sector_name("Financial Services") == "Financials"
+    assert normalize_sector_name("Healthcare") == "Health Care"
+    assert normalize_sector_name("Consumer Cyclical") == "Consumer Discretionary"
+    assert normalize_sector_name("Consumer Defensive") == "Consumer Staples"
+    assert normalize_sector_name("Basic Materials") == "Materials"
+    assert normalize_sector_name("Technology") == "Technology"
+    assert normalize_sector_name(None) == "Unknown"
+    assert normalize_sector_name("  Financial Services  ") == "Financials"
+
+
+# ── winsorize ────────────────────────────────────────────────────────────────
+
+
+def test_winsorize_clamp():
+    """Valeur dans bornes = inchangée ; hors bornes haute/basse = clampée exactement."""
+    from scanner.scoring.engine import winsorize
+
+    assert winsorize(0.5, 0.0, 1.0) == 0.5
+    assert winsorize(-0.5, 0.0, 1.0) == 0.0
+    assert winsorize(1.5, 0.0, 1.0) == 1.0
+    assert winsorize(0.0, 0.0, 1.0) == 0.0
+    assert winsorize(1.0, 0.0, 1.0) == 1.0
+
+
+# ── compute_inverse_vol_weights — fallback equal-weight ──────────────────────
+
+
+def test_inverse_vol_weights_no_data():
+    """Aucun historique prix suffisant → poids égaux (100/N)."""
+    from scanner.scoring.engine import compute_inverse_vol_weights
+
+    ranked_df = pd.DataFrame({"symbol": ["A", "B", "C"]})
+    all_data = {
+        "A": {"prices": None},
+        "B": {"prices": pd.DataFrame({"Close": [100.0] * 10})},  # < 60 jours
+        "C": {"prices": None},
+    }
+    result = compute_inverse_vol_weights(ranked_df, all_data)
+    expected_weight = 100.0 / 3
+    assert (result["suggested_weight_pct"] - expected_weight).abs().max() < 1e-6
+
+
+# ── truncate_message_html_safe ────────────────────────────────────────────────
+
+
+def test_truncate_message_html_safe_closes_tags():
+    """Message tronqué avec <b> non fermé → balise <b> fermée automatiquement."""
+    from scanner.notifier import truncate_message_html_safe
+
+    long_msg = "<b>" + "X" * 5000
+    result = truncate_message_html_safe(long_msg, max_chars=100)
+    assert len(result) <= 100 + len("</b>")
+    assert result.endswith("</b>")
+
+
+def test_truncate_message_html_safe_no_truncation_needed():
+    """Message court → retourné intact."""
+    from scanner.notifier import truncate_message_html_safe
+
+    msg = "<b>Hello</b>"
+    assert truncate_message_html_safe(msg, max_chars=4096) == msg
+
+
+def test_truncate_message_html_safe_nested_tags():
+    """<b><i> ouverts sans fermeture → fermés dans l'ordre inverse."""
+    from scanner.notifier import truncate_message_html_safe
+
+    long_msg = "<b><i>" + "X" * 5000
+    result = truncate_message_html_safe(long_msg, max_chars=100)
+    assert result.endswith("</i></b>")
+
+
+# ── filter_post_scoring — exclusion données stale ────────────────────────────
+
+
+def test_filter_post_scoring_stale_data_excluded():
+    """Ticker avec données vieilles de 201j → exclu du top 10 (data_freshness_check False)."""
+    import time as _time
+
+    from scanner.filters import filter_post_scoring
+
+    stale_ts = _time.time() - 201 * 86400
+    fresh_ts = _time.time() - 10 * 86400
+
+    rows = [
+        {"symbol": "STALE", "sector": "Tech", "score_global": 99},
+        {"symbol": "FRESH", "sector": "Tech", "score_global": 80},
+    ]
+    all_data = {
+        "STALE": {"info": {"mostRecentQuarter": stale_ts}},
+        "FRESH": {"info": {"mostRecentQuarter": fresh_ts}},
+    }
+    df = pd.DataFrame(rows)
+    result = filter_post_scoring(df, all_data)
+    symbols = result["symbol"].tolist()
+    assert "STALE" not in symbols
+    assert "FRESH" in symbols
+
+
+# ── is_eligible_etf — fallback ticker quand nom vide ─────────────────────────
+
+
+def test_is_eligible_etf_empty_name_uses_ticker():
+    """Nom vide → vérifie le ticker. Patterns non présents dans ticker → pass (SQQQ non détecté)."""
+    from scanner.universe import is_eligible_etf
+
+    # SQQQ ne contient aucun des patterns → True quand nom absent (limite connue)
+    assert is_eligible_etf("SQQQ", "")
+    # TQQQ ne contient pas non plus les patterns dans le ticker seul
+    assert is_eligible_etf("TQQQ", "")
+    # XLK passe toujours
+    assert is_eligible_etf("XLK", "")
+    # Ticker avec pattern explicite exclu même sans nom
+    assert not is_eligible_etf("SOME-BEAR-ETF", "")
+
+
+def test_is_eligible_etf_inverse_in_name():
+    """INVERSE dans le nom → exclu."""
+    from scanner.universe import is_eligible_etf
+
+    assert not is_eligible_etf("SOME", "ProShares Short INVERSE Fund")
+
+
+# ── get_first_seen_dates_batch — batch IN query ───────────────────────────────
+
+
+def test_get_first_seen_dates_batch(tmp_path):
+    """Batch query retourne correct first_seen_date pour plusieurs symboles en une requête."""
+    import sqlite3
+    from unittest.mock import patch
+
+    import scanner.storage as storage_module
+    from scanner.storage import get_first_seen_dates_batch, init_db
+
+    db_file = str(tmp_path / "test_batch.db")
+    with patch.object(storage_module, "DB_PATH", db_file):
+        init_db()
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO scans (scan_date, market_regime, universe_size, eligible_count) VALUES (?,?,?,?)",
+            ("2026-01-01", "normal", 100, 2),
+        )
+        scan_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, first_seen_date) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (scan_id, "AAPL", "Apple", "stock", 1, 90.0, "2026-01-01"),
+        )
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, first_seen_date) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (scan_id, "MSFT", "Microsoft", "stock", 2, 85.0, "2026-01-01"),
+        )
+        conn.commit()
+        conn.close()
+
+        result = get_first_seen_dates_batch(["AAPL", "MSFT", "GOOG"], "2026-05-21")
+
+    assert result["AAPL"] == "2026-01-01"
+    assert result["MSFT"] == "2026-01-01"
+    assert result["GOOG"] == "2026-05-21"
