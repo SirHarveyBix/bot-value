@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sqlite3
 from datetime import datetime
 
@@ -552,3 +554,61 @@ def reconstruct_portfolio_and_maturation(conn):
         }
 
     return current_portfolio, exits_today
+
+
+JSON_PATH = "data/signals/signals_latest.json"
+
+
+def export_signals_json(top_stocks, top_etfs, universe_size: int, market_data: dict | None = None) -> None:
+    """Écrit data/signals/signals_latest.json pour le dashboard web."""
+    os.makedirs(os.path.dirname(JSON_PATH), exist_ok=True)
+
+    stocks_list = []
+    for _, row in top_stocks.iterrows():
+        stocks_list.append(
+            {
+                "symbol": row.get("symbol", ""),
+                "name": row.get("name", ""),
+                "sector": row.get("sector", ""),
+                "score_global": float(row.get("score_global", 0)),
+                "score_quality": float(row.get("score_quality", 0)),
+                "score_valuation": float(row.get("score_valuation") or 0),
+                "score_momentum": float(row.get("score_momentum", 0)),
+                "pe": float(row["pe"]) if row.get("pe") is not None else None,
+                "roe": float(row["roe"]) if row.get("roe") is not None else None,
+                "perf_6m": float(row["perf_6m"]) if row.get("perf_6m") is not None else None,
+                "mcap_b": float(row.get("mcap_b", 0)),
+                "flags": row.get("quality_flags") or [],
+                "first_seen_date": row.get("first_seen_date"),
+                "suggested_weight_pct": float(row["suggested_weight_pct"])
+                if row.get("suggested_weight_pct") is not None
+                else None,
+            }
+        )
+
+    etfs_list = []
+    for _, row in top_etfs.iterrows():
+        etfs_list.append(
+            {
+                "symbol": row.get("symbol", ""),
+                "score_global": float(row.get("score_global", 0)),
+                "perf_6m": float(row["perf_6m"]) if row.get("perf_6m") is not None else None,
+                "vol_trend": float(row["outperf_spy"]) if row.get("outperf_spy") is not None else None,
+            }
+        )
+
+    payload = {
+        "scan_timestamp": datetime.now().isoformat(),
+        "universe_size": universe_size,
+        "market_regime": (market_data or {}).get("regime"),
+        "vix": (market_data or {}).get("vix"),
+        "spy_price": (market_data or {}).get("spy_price"),
+        "spy_ema200": (market_data or {}).get("spy_ema200"),
+        "top_stocks": stocks_list,
+        "top_etfs": etfs_list,
+    }
+
+    with open(JSON_PATH, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+
+    logger.info(f"signals_latest.json exporté ({len(stocks_list)} stocks, {len(etfs_list)} ETFs)")

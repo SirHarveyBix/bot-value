@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import sqlite3
 from datetime import datetime
 
 import pandas_market_calendars as mcal
@@ -16,6 +17,7 @@ from scanner.notifier import notify, notify_panic, notify_vix_unavailable
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
 from scanner.storage import (
     DB_PATH,
+    export_signals_json,
     get_first_seen_dates_batch,
     reconstruct_portfolio_and_maturation,
     save_scanned_universe,
@@ -138,14 +140,13 @@ async def run_scanner(force=False):
         # 8. Storage
         market_data = {"regime": market_regime, "spy_price": current_spy, "spy_ema200": ema200, "vix": current_vix}
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
+        export_signals_json(top_10_stocks, top_5_etfs, len(eligible_stocks), market_data=market_data)
 
         # Simulation du portefeuille, maturation et sorties
         portfolio: dict = {}
         exits_today: list = []
         try:
-            import sqlite3 as _sqlite3
-
-            with _sqlite3.connect(DB_PATH) as _conn:
+            with sqlite3.connect(DB_PATH) as _conn:
                 portfolio, exits_today = reconstruct_portfolio_and_maturation(_conn)
         except Exception as _e:
             logger.warning(f"Impossible de reconstruire le portefeuille: {_e}")
