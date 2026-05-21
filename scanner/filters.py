@@ -166,4 +166,3 @@ def sanity_check_gate(prices_df, symbol: str) -> bool:
         )
         return False
     return True
-

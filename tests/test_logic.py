@@ -922,6 +922,7 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
     # On coince le chemin de la base de données de stockage
     with patch("scanner.storage.DB_PATH", db_path):
         from scanner.storage import init_db
+
         init_db()
 
         conn = sqlite3.connect(db_path)
@@ -932,7 +933,7 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
         conn.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
             "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 2, 85.0)",
-            (scan1_id,)
+            (scan1_id,),
         )
         conn.commit()
 
@@ -948,7 +949,7 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
         conn.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
             "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 12, 76.0)",
-            (scan2_id,)
+            (scan2_id,),
         )
         conn.commit()
 
@@ -964,7 +965,7 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
         conn.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
             "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 16, 72.0)",
-            (scan3_id,)
+            (scan3_id,),
         )
         conn.commit()
 
@@ -980,7 +981,7 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
         conn.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global) "
             "VALUES (?, 'AAPL', 'Apple Inc', 'stock', 17, 68.0)",
-            (scan4_id,)
+            (scan4_id,),
         )
         conn.commit()
 
@@ -993,5 +994,3 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
         assert exits[0]["score"] == 68.0
 
         conn.close()
-
-

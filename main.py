@@ -70,7 +70,9 @@ async def run_scanner(force=False):
         market_regime = regime.value
 
         if regime == MarketRegime.PANIC:
-            logger.info("Market Gate: VIX > 35 (PANIC). Le scan complet continue en mode silencieux et persistera les signaux en base.")
+            logger.info(
+                "Market Gate: VIX > 35 (PANIC). Le scan complet continue en mode silencieux et persistera les signaux en base."
+            )
 
         # 1. Universe Builder
         universe = load_universe()
@@ -149,13 +151,21 @@ async def run_scanner(force=False):
                 for symbol, port_item in portfolio.items():
                     cursor.execute(
                         "UPDATE signals SET flags = ? WHERE scan_id = ? AND symbol = ?",
-                        (port_item["status"], scan_id, symbol)
+                        (port_item["status"], scan_id, symbol),
                     )
                 for ex_item in exits_today:
                     cursor.execute(
                         "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, flags) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (scan_id, ex_item["symbol"], ex_item["name"], "stock", ex_item["rank"], ex_item["score"], "EXIT")
+                        (
+                            scan_id,
+                            ex_item["symbol"],
+                            ex_item["name"],
+                            "stock",
+                            ex_item["rank"],
+                            ex_item["score"],
+                            "EXIT",
+                        ),
                     )
             _conn.commit()
             _conn.close()
@@ -180,7 +190,9 @@ async def run_scanner(force=False):
         if market_regime == "panic":
             await notify_panic(current_vix, current_spy, ema200)
         else:
-            await notify(top_10_stocks, top_5_etfs, market_regime=market_regime, portfolio=portfolio, exits_today=exits_today)
+            await notify(
+                top_10_stocks, top_5_etfs, market_regime=market_regime, portfolio=portfolio, exits_today=exits_today
+            )
 
         if not top_10_stocks.empty:
             logger.info("TOP 5 STOCKS IDENTIFIED:")

@@ -71,4 +71,3 @@ class CacheManager:
 
 # Instance globale
 cache = CacheManager()
-

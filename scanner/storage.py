@@ -431,18 +431,15 @@ def reconstruct_portfolio_and_maturation(conn):
     exits_today = []
 
     for idx, (scan_id, scan_date) in enumerate(scans_rows):
-        is_last_scan = (idx == len(scans_rows) - 1)
+        is_last_scan = idx == len(scans_rows) - 1
         if is_last_scan:
             exits_today = []
 
         # Récupère tous les signaux de type stock pour ce scan
         signals_rows = conn.execute(
-            "SELECT symbol, rank, score_global, name FROM signals WHERE scan_id = ? AND type = 'stock'",
-            (scan_id,)
+            "SELECT symbol, rank, score_global, name FROM signals WHERE scan_id = ? AND type = 'stock'", (scan_id,)
         ).fetchall()
-        scan_signals = {
-            row[0]: {"rank": row[1], "score": row[2], "name": row[3]} for row in signals_rows
-        }
+        scan_signals = {row[0]: {"rank": row[1], "score": row[2], "name": row[3]} for row in signals_rows}
 
         # 1. Met à jour et incrémente days_held des tickers déjà en portefeuille
         to_check_exit = list(portfolio.keys())
@@ -466,7 +463,7 @@ def reconstruct_portfolio_and_maturation(conn):
                         "name": portfolio[symbol]["name"],
                         "days_held": portfolio[symbol]["days_held"],
                         "rank": rank,
-                        "score": score
+                        "score": score,
                     }
                     if is_last_scan:
                         exits_today.append(ex_data)
@@ -480,7 +477,7 @@ def reconstruct_portfolio_and_maturation(conn):
                         "days_held": 1,
                         "last_rank": sig["rank"],
                         "last_score": sig["score"],
-                        "name": sig["name"]
+                        "name": sig["name"],
                     }
 
     # Construit le résultat final pour le portefeuille actuel
@@ -500,8 +497,7 @@ def reconstruct_portfolio_and_maturation(conn):
             "status": status,
             "rank": data["last_rank"],
             "score": data["last_score"],
-            "name": data["name"]
+            "name": data["name"],
         }
 
     return current_portfolio, exits_today
-

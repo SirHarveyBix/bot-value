@@ -19,6 +19,7 @@ from scanner.scoring.momentum import compute_analyst_revision_3m
 # yfinance handles its own session natively via curl_cffi to bypass bot protections.
 # Do not pass a custom requests Session.
 
+
 def normalize_sector_name(sector: str | None) -> str:
     if not sector:
         return "Unknown"
@@ -37,9 +38,10 @@ def normalize_sector_name(sector: str | None) -> str:
         "Real Estate": "Real Estate",
         "Utilities": "Utilities",
         "Communication Services": "Communication Services",
-        "Industrials": "Industrials"
+        "Industrials": "Industrials",
     }
     return mapping.get(s, s)
+
 
 # TTL depuis config (anti race-condition : 27h > 24h pour éviter expiration 3 min avant scan 09h35)
 TTL_FUNDAMENTALS = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)
