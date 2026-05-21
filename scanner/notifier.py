@@ -221,6 +221,20 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
 
 
+def format_etf_signal(etf_data: dict, rank: int) -> str:
+    """Formate un signal ETF selon le template §6.2 de la spec."""
+    symbol = escape_html(etf_data.get("symbol", ""))
+    name = escape_html(etf_data.get("name", symbol))
+    score = int(etf_data.get("score_global", 0))
+    perf_6m = etf_data.get("perf_6m", 0) or 0
+    outperf_spy = etf_data.get("outperf_spy", 0) or 0
+
+    msg = f"#{rank} <b>{name}</b> (${symbol})\n"
+    msg += f"Score : {score}/100 | Perf 6M : {perf_6m:+.1%} vs SPY {outperf_spy:+.1%}\n"
+    msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
+    return msg
+
+
 async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits_today=None):
     """Envoi des signaux via Telegram (Asynchrone)."""
     if top_stocks.empty and top_etfs.empty and not exits_today:

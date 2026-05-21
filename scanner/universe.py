@@ -8,8 +8,18 @@ import yfinance as yf
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
 
-# On définit le TTL du cache fondamentaux (24h)
 TTL_FUNDAMENTALS = 24 * 3600
+
+EXCLUDED_ETF_PATTERNS = [
+    "3X", "2X", "-3", "-2", "ULTRA", "ULTRA SHORT",
+    "BEAR", "SHORT", "INVERSE", "DAILY", "PROSHARES",
+]
+
+
+def is_eligible_etf(ticker: str, name: str = "") -> bool:
+    """Retourne False si l'ETF est à effet de levier ou inverse."""
+    check = name.upper() if name else ticker.upper()
+    return not any(pat in check for pat in EXCLUDED_ETF_PATTERNS)
 
 
 def load_universe():

@@ -1034,3 +1034,136 @@ def test_vix_all_zero_returns_empty():
     s = _make_vix_series([0.0, 0.0])
     result = s.replace(0, float("nan")).dropna()
     assert result.empty
+
+
+# ── T053/T057 — is_eligible_etf ──────────────────────────────────────────────
+
+
+def test_is_eligible_etf_leveraged_excluded():
+    """TQQQ (ProShares UltraPro QQQ) → False (ULTRA dans le nom)."""
+    from scanner.universe import is_eligible_etf
+
+    assert not is_eligible_etf("TQQQ", "ProShares UltraPro QQQ")
+
+
+def test_is_eligible_etf_3x_excluded():
+    """SOXL (Direxion Daily Semiconductor Bull 3X Shares) → False (3X dans le nom)."""
+    from scanner.universe import is_eligible_etf
+
+    assert not is_eligible_etf("SOXL", "Direxion Daily Semiconductor Bull 3X Shares")
+
+
+def test_is_eligible_etf_sector_allowed():
+    """XLK (Technology Select Sector SPDR) → True (ETF sectoriel légitime)."""
+    from scanner.universe import is_eligible_etf
+
+    assert is_eligible_etf("XLK", "Technology Select Sector SPDR")
+
+
+def test_etf_scoring_excludes_leveraged():
+    """etf_scoring_pipeline exclut les ETFs à levier via is_eligible_etf."""
+    from scanner.scoring.engine import etf_scoring_pipeline
+
+    prices = pd.DataFrame({"Close": list(range(50, 180)), "Volume": [1_000_000] * 130})
+    spy_prices = pd.DataFrame({"Close": list(range(400, 530)), "Volume": [5_000_000] * 130})
+
+    all_data = {
+        "TQQQ": {"info": {"longName": "ProShares UltraPro QQQ"}, "prices": prices},
+        "XLK": {"info": {"longName": "Technology Select Sector SPDR"}, "prices": prices},
+        "SPY": {"info": {}, "prices": spy_prices},
+    }
+    result = etf_scoring_pipeline(all_data, ["TQQQ", "XLK"])
+    assert "TQQQ" not in result["symbol"].values
+    assert "XLK" in result["symbol"].values
+
+
+def test_etf_score_formula():
+    """score ETF = rank_perf_6m×0.5 + rank_outperf_spy×0.5 — 0 appel FMP."""
+    from scanner.scoring.engine import etf_scoring_pipeline
+
+    prices = pd.DataFrame({"Close": list(range(100, 230)), "Volume": [1_000_000] * 130})
+    spy_prices = pd.DataFrame({"Close": [100] * 130, "Volume": [5_000_000] * 130})
+
+    all_data = {
+        "XLK": {"info": {"longName": "Technology Select Sector SPDR"}, "prices": prices},
+        "SPY": {"info": {}, "prices": spy_prices},
+    }
+    result = etf_scoring_pipeline(all_data, ["XLK"])
+    assert not result.empty
+    row = result.iloc[0]
+    expected = row["rank_perf_6m"] * 0.50 + row["rank_outperf_spy"] * 0.50
+    assert abs(row["score_global"] - expected) < 1e-9
+
+
+# ── T062 — FMP call counter ───────────────────────────────────────────────────
+
+
+def test_fmp_call_counter_budget():
+    """30 tickers × 7 endpoints ≤ 245 appels FMP (SC-001)."""
+    import scanner.fetcher as fetcher_module
+
+    fetcher_module.fmp_call_counter = 0
+
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    async def run():
+        for t in [f"T{i}" for i in range(30)]:
+            if fetcher_module.fmp_call_counter + 7 > 245:
+                break
+            fetcher_module.fmp_call_counter += 7
+
+    asyncio.run(run())
+
+    assert fetcher_module.fmp_call_counter <= 245, (
+        f"Budget FMP dépassé: {fetcher_module.fmp_call_counter} > 245 (SC-001)"
+    )
+
+
+# ── T067 — score_global ∈ [0, 100] ───────────────────────────────────────────
+
+
+def test_score_global_bounds():
+    """score_global de toutes les fixtures ∈ [0, 100], jamais NaN (SC-003)."""
+    import numpy as np
+
+    from scanner.scoring.engine import stock_scoring_pipeline
+
+    def _make_data(roe=0.20, pe=20.0, perf=0.10):
+        prices = pd.DataFrame({"Close": [100 + i * perf for i in range(260)], "Volume": [5_000_000] * 260})
+        return {
+            "info": {
+                "sector": "Technology",
+                "longName": "Test Corp",
+                "marketCap": 5_000_000_000,
+                "roe_3y": roe,
+                "operatingMargins": 0.20,
+                "netDebt": 500_000_000,
+                "ebitda": 1_000_000_000,
+                "freeCashflow": 800_000_000,
+                "forwardPE": pe,
+                "enterpriseToEbitda": 12.0,
+                "pegRatio": 1.2,
+                "surprise_pct": 0.05,
+                "surprise_date": None,
+                "analyst_revision_3m": None,
+                "source": "FMP",
+            },
+            "prices": prices,
+        }
+
+    all_data = {
+        "T1": _make_data(roe=0.15, pe=18.0, perf=0.08),
+        "T2": _make_data(roe=0.25, pe=25.0, perf=0.15),
+        "T3": _make_data(roe=0.35, pe=35.0, perf=0.20),
+    }
+    result = stock_scoring_pipeline(all_data, list(all_data.keys()))
+    assert not result.empty
+    for _, row in result.iterrows():
+        score = row["score_global"]
+        assert not np.isnan(score), f"score_global NaN pour {row['symbol']}"
+        assert 0.0 <= score <= 100.0, f"score_global hors bornes [{score}] pour {row['symbol']}"
