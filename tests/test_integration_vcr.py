@@ -414,12 +414,8 @@ async def test_fetch_fmp_data_success():
             ]
         ),
         "profile": make_resp([{"companyName": "Apple", "sector": "Technology", "marketCap": 3e12}]),
-        "income-statement": make_resp(
-            [{"date": "2025-09-30", "netIncome": 1e9, "ebitda": 5e8}]
-        ),
-        "balance-sheet-statement": make_resp(
-            [{"totalStockholdersEquity": 5e9, "netDebt": 5e8, "totalDebt": 1e9}]
-        ),
+        "income-statement": make_resp([{"date": "2025-09-30", "netIncome": 1e9, "ebitda": 5e8}]),
+        "balance-sheet-statement": make_resp([{"totalStockholdersEquity": 5e9, "netDebt": 5e8, "totalDebt": 1e9}]),
     }
 
     async def mock_get(url, **kwargs):
