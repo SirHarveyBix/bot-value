@@ -401,6 +401,49 @@ async def save_scanned_universe(eligible_df, shortlist_symbols: list[str], top10
     logger.info(f"scanned_universe : {len(rows)} tickers enregistrés pour {scan_date}")
 
 
+def update_portfolio_flags(scan_date: str, portfolio: dict, exits_today: list) -> None:
+    """Persiste les flags ACHAT/MATURATION/HOLD et insère les EXIT dans signals pour scan_date."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM scans WHERE scan_date = ?", (scan_date,))
+        row = cursor.fetchone()
+        if row:
+            scan_id = row[0]
+            for symbol, port_item in portfolio.items():
+                cursor.execute(
+                    "UPDATE signals SET flags = ? WHERE scan_id = ? AND symbol = ?",
+                    (port_item["status"], scan_id, symbol),
+                )
+            for ex_item in exits_today:
+                cursor.execute(
+                    "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, flags) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (scan_id, ex_item["symbol"], ex_item["name"], "stock", ex_item["rank"], ex_item["score"], "EXIT"),
+                )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"update_portfolio_flags: {e}")
+
+
+def get_first_seen_dates_batch(symbols: list[str], today_str: str) -> dict[str, str]:
+    """Retourne {symbol: first_seen_date} pour une liste de symboles (batch, une seule connexion)."""
+    result: dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        for symbol in symbols:
+            result[symbol] = get_first_seen_date(conn, symbol) or today_str
+        conn.close()
+    except Exception as e:
+        logger.warning(f"get_first_seen_dates_batch: {e}")
+        for s in symbols:
+            result.setdefault(s, today_str)
+    return result
+
+
 def reconstruct_portfolio_and_maturation(conn):
     """
     Simule chronologiquement l'histoire des scans SQLite pour tracer le portefeuille :

@@ -220,10 +220,13 @@ def stock_scoring_pipeline(all_data, symbols):
     df["use_cross_universe_ranking"] = df["sector"].isin(small_sectors)
 
     if small_sectors:
+        cross_rank_pe = compute_percentile_ranks(df, "pe", ascending=False)
+        cross_rank_ev = compute_percentile_ranks(df, "ev_ebitda", ascending=False)
+        cross_rank_margin = compute_percentile_ranks(df, "margin")
         mask = df["sector"].isin(small_sectors)
-        df.loc[mask, "rank_pe"] = 50.0
-        df.loc[mask, "rank_ev_ebitda"] = 50.0
-        df.loc[mask, "rank_margin"] = 50.0
+        df.loc[mask, "rank_pe"] = cross_rank_pe[mask]
+        df.loc[mask, "rank_ev_ebitda"] = cross_rank_ev[mask]
+        df.loc[mask, "rank_margin"] = cross_rank_margin[mask]
 
     # Scores qualité
     qw = CONFIG["scoring"]["quality_subweights"]

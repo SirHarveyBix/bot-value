@@ -480,8 +480,10 @@ def test_intra_sector_fallback():
 
     if not result.empty:
         assert result["use_cross_universe_ranking"].all()
+        # Cross-universe fallback : rangs basés sur l'univers complet, pas neutralisés à 50.0
         for col in ["rank_pe", "rank_ev_ebitda", "rank_margin"]:
-            assert (result[col] == 50.0).all()
+            assert result[col].notna().all(), f"{col} ne doit pas être NaN"
+            assert not (result[col] == 50.0).all(), f"{col} ne doit pas être uniformément 50.0 (cross-universe attendu)"
 
 
 # T039
@@ -994,3 +996,40 @@ def test_portfolio_maturation_and_hysteresis(tmp_path):
         assert exits[0]["score"] == 68.0
 
         conn.close()
+
+
+# ── T082 — VIX NaN/0 fallback ─────────────────────────────────────────────────
+
+
+def _make_vix_series(values):
+    return pd.Series(values, dtype=float)
+
+
+def test_vix_nan_fallback_uses_last_valid():
+    """Dernière valeur NaN → fallback sur avant-dernière valeur non-NaN."""
+    s = _make_vix_series([25.0, 28.0, float("nan")])
+    result = s.replace(0, float("nan")).dropna()
+    assert not result.empty
+    assert result.iloc[-1] == 28.0
+
+
+def test_vix_zero_treated_as_nan():
+    """VIX = 0 → traité comme NaN → fallback sur valeur précédente."""
+    s = _make_vix_series([30.0, 0.0])
+    result = s.replace(0, float("nan")).dropna()
+    assert not result.empty
+    assert result.iloc[-1] == 30.0
+
+
+def test_vix_all_nan_returns_empty():
+    """Série entièrement NaN → dropna() vide → scan doit être annulé."""
+    s = _make_vix_series([float("nan"), float("nan")])
+    result = s.replace(0, float("nan")).dropna()
+    assert result.empty
+
+
+def test_vix_all_zero_returns_empty():
+    """Série entièrement 0 → remplacés par NaN → dropna() vide → scan doit être annulé."""
+    s = _make_vix_series([0.0, 0.0])
+    result = s.replace(0, float("nan")).dropna()
+    assert result.empty

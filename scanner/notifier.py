@@ -99,6 +99,20 @@ async def notify_fmp_unavailable():
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
+async def notify_vix_unavailable():
+    """Envoie l'alerte Telegram VIX/SPY indisponible → scan annulé (T081)."""
+    bot, chat_id = _get_bot()
+    if not bot:
+        logger.warning("Notifications Telegram désactivées (token manquant).")
+        return
+    msg = (
+        "⚠️ <b>VIX indisponible — scan annulé</b>\n"
+        "<i>La série VIX ou SPY ne contient aucune valeur valide (NaN/0). "
+        "Le scan a été interrompu pour préserver l'intégrité du Market Gate.</i>"
+    )
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
+
+
 async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfolio=None, exits_today=None):
     """
     Envoie les signaux via Telegram.
@@ -152,7 +166,10 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
             elif status == "HOLD":
                 status_tag = f"🟢 <b>HOLD</b> (Détention : {days_held} jours)\n"
 
-        msg = f"#{i + 1} {status_tag}📈 <b>{name}</b> (${symbol})\n"
+        if status_tag:
+            msg = f"#{i + 1}\n{status_tag}📈 <b>{name}</b> (${symbol})\n"
+        else:
+            msg = f"#{i + 1} 📈 <b>{name}</b> (${symbol})\n"
         msg += f"Score Global : {score}/100\n"
         msg += f"├ Qualité     : {int(row['score_quality'])}/100\n"
         msg += f"├ Valorisation: {int(row['score_valuation'])}/100\n"
