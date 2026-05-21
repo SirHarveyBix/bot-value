@@ -14,7 +14,6 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
 from scanner.notifier import notify_fmp_unavailable
-from scanner.scoring.momentum import compute_analyst_revision_3m
 
 # yfinance handles its own session natively via curl_cffi to bypass bot protections.
 # Do not pass a custom requests Session.
@@ -82,20 +81,20 @@ class _FMPBase(BaseModel):
 
 
 class FMPRatiosTTM(_FMPBase):
-    priceEarningsRatioTTM: Optional[float] = None
-    enterpriseValueOverEBITDATTM: Optional[float] = None
-    pegRatioTTM: Optional[float] = None
+    # FMP stable API field names (v3 deprecated Aug 2025)
+    priceToEarningsRatioTTM: Optional[float] = None
+    enterpriseValueMultipleTTM: Optional[float] = None
+    priceToEarningsGrowthRatioTTM: Optional[float] = None
     operatingProfitMarginTTM: Optional[float] = None
-    returnOnEquityTTM: Optional[float] = None
+    bookValuePerShareTTM: Optional[float] = None
 
 
 class FMPKeyMetricsTTM(_FMPBase):
-    roicTTM: Optional[float] = None
-    netDebtTTM: Optional[float] = None
-    ebitdaTTM: Optional[float] = None
-    totalDebtTTM: Optional[float] = None
-    freeCashFlowTTM: Optional[float] = None
-    bookValuePerShareTTM: Optional[float] = None
+    # FMP stable API field names (v3 deprecated Aug 2025)
+    # returnOnEquityTTM moved from ratios-ttm to key-metrics-ttm
+    returnOnEquityTTM: Optional[float] = None
+    returnOnInvestedCapitalTTM: Optional[float] = None
+    freeCashFlowYieldTTM: Optional[float] = None
 
 
 def _parse_fmp_response(raw: list | dict, model_class: type[_FMPBase], ticker: str) -> Optional[_FMPBase]:
@@ -195,14 +194,16 @@ async def fetch_prices_batch(tickers, period="1y"):
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
+    Utilise l'API stable FMP (v3 dépréciée août 2025, retourne 403).
+    URL format stable : ?symbol={symbol}&apikey={key} (pas de path param).
+    5 endpoints (earnings-surprises 404, analyst-estimates 402 sur plan gratuit).
     Lève FMPUnavailableError si clé absente ou 5xx persistant (tenacity, 2 retries max).
-    Respecte le disjoncteur global fmp_call_counter (hard limit 245 calls/run).
-    Valide les réponses via Pydantic — null/string invalide → None, pipeline non corrompu.
+    Respecte le disjoncteur global fmp_call_counter (hard limit 175 calls/run = 35×5).
     """
     global fmp_call_counter
 
-    budget_limit = CONFIG["scanner"].get("fmp_call_budget_hard_limit", 245)
-    if fmp_call_counter + 7 > budget_limit:
+    budget_limit = CONFIG["scanner"].get("fmp_call_budget_hard_limit", 175)
+    if fmp_call_counter + 5 > budget_limit:
         logger.warning(
             f"Budget FMP atteint ({fmp_call_counter} calls) — skip {symbol} (disjoncteur {budget_limit} calls)"
         )
@@ -216,15 +217,13 @@ async def fetch_fmp_data(client, symbol):
 
     try:
         responses = await asyncio.gather(
-            _fmp_get(client, f"{base_url}/ratios-ttm/{symbol}?apikey={api_key}"),
-            _fmp_get(client, f"{base_url}/key-metrics-ttm/{symbol}?apikey={api_key}"),
-            _fmp_get(client, f"{base_url}/profile/{symbol}?apikey={api_key}"),
-            _fmp_get(client, f"{base_url}/income-statement/{symbol}?limit=3&apikey={api_key}"),
-            _fmp_get(client, f"{base_url}/balance-sheet-statement/{symbol}?limit=3&apikey={api_key}"),
-            _fmp_get(client, f"{base_url}/earnings-surprises/{symbol}?apikey={api_key}"),
-            _fmp_get(client, f"{base_url}/analyst-estimates/{symbol}?period=quarter&limit=3&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/ratios-ttm?symbol={symbol}&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/key-metrics-ttm?symbol={symbol}&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/profile?symbol={symbol}&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/income-statement?symbol={symbol}&limit=3&apikey={api_key}"),
+            _fmp_get(client, f"{base_url}/balance-sheet-statement?symbol={symbol}&limit=3&apikey={api_key}"),
         )
-        fmp_call_counter += 7  # comptabilisé après succès du gather
+        fmp_call_counter += 5
     except httpx.HTTPStatusError as e:
         raise FMPUnavailableError(f"FMP 5xx persistant après 2 tentatives pour {symbol}: {e}") from e
     except FMPUnavailableError:
@@ -239,8 +238,6 @@ async def fetch_fmp_data(client, symbol):
         p_data = responses[2].json()
         is_data = responses[3].json()
         bs_data = responses[4].json()
-        s_data = responses[5].json()
-        a_data = responses[6].json()
 
         if not (r_data and k_data and p_data):
             return None
@@ -252,25 +249,16 @@ async def fetch_fmp_data(client, symbol):
             logger.warning(f"FMP: réponse invalide pour {symbol} (ratios/key-metrics)")
             return None
 
-        p = p_data[0]
+        p_item = p_data[0] if isinstance(p_data, list) else p_data
 
+        # earnings-surprises (404) et analyst-estimates (402) indisponibles sur plan gratuit stable
         surprise_pct = 0.0
         surprise_date = None
-        if s_data and len(s_data) > 0:
-            surprise_pct = s_data[0].get("surprisePercentage", 0) / 100.0
-            surprise_date = s_data[0].get("date")
+        analyst_revision_3m = None
 
-        analyst_revision_3m = compute_analyst_revision_3m(a_data) if a_data else None
-
-        # Priority: surprise_date (quarterly earnings announcement) → far more recent
-        # than annual IS date (e.g. "2024-12-31" = 500+ days ago, always fails freshness).
+        # Fraîcheur : date IS stable = FY2025 (~145 jours), passe le filtre 200 jours
         most_recent_quarter_ts = None
-        if surprise_date:
-            try:
-                most_recent_quarter_ts = datetime.fromisoformat(surprise_date).timestamp()
-            except ValueError:
-                pass
-        if most_recent_quarter_ts is None and is_data and len(is_data) > 0:
+        if isinstance(is_data, list) and len(is_data) > 0:
             date_str = is_data[0].get("date")
             if date_str:
                 try:
@@ -278,6 +266,7 @@ async def fetch_fmp_data(client, symbol):
                 except ValueError:
                     pass
 
+        # ROE 3 ans : netIncome/totalStockholdersEquity depuis IS+BS stables
         roe_3y = None
         is_list = isinstance(is_data, list)
         bs_list = isinstance(bs_data, list)
@@ -291,35 +280,44 @@ async def fetch_fmp_data(client, symbol):
             if roes:
                 roe_3y = sum(roes) / len(roes)
         else:
-            logger.debug(f"FMP IS/BS vide ou non-liste pour {symbol} (is={type(is_data).__name__}[{len(is_data) if isinstance(is_data, (list,dict)) else '?'}], bs={type(bs_data).__name__}[{len(bs_data) if isinstance(bs_data, (list,dict)) else '?'}])")
+            logger.debug(f"FMP IS/BS vide ou non-liste pour {symbol}")
 
-        # Fallback : IS annuel indisponible sur plan gratuit → utilise ROE TTM comme proxy
-        if roe_3y is None and r.returnOnEquityTTM is not None:
-            roe_3y = r.returnOnEquityTTM
-            logger.debug(f"ROE TTM fallback pour {symbol} (IS annuel vide sur ce plan FMP)")
+        # Fallback : IS annuel vide → ROE TTM key-metrics comme proxy
+        if roe_3y is None and k.returnOnEquityTTM is not None:
+            roe_3y = k.returnOnEquityTTM
+            logger.debug(f"ROE TTM fallback pour {symbol} (IS vide)")
+
+        # netDebt, ebitda, totalDebt depuis IS/BS (absents de key-metrics-ttm stable)
+        net_debt = bs_data[0].get("netDebt") if bs_list and len(bs_data) > 0 else None
+        ebitda = is_data[0].get("ebitda") if is_list and len(is_data) > 0 else None
+        total_debt = bs_data[0].get("totalDebt") if bs_list and len(bs_data) > 0 else None
+
+        # freeCashflow : freeCashFlowYieldTTM × marketCap → montant absolu
+        mkt_cap = p_item.get("marketCap")
+        free_cashflow = k.freeCashFlowYieldTTM * mkt_cap if (k.freeCashFlowYieldTTM is not None and mkt_cap) else None
 
         return {
             "symbol": symbol,
-            "longName": p.get("companyName"),
-            "sector": normalize_sector_name(p.get("sector")),
-            "marketCap": p.get("mktCap"),
-            "roe_ttm": r.returnOnEquityTTM,
+            "longName": p_item.get("companyName"),
+            "sector": normalize_sector_name(p_item.get("sector")),
+            "marketCap": mkt_cap,
+            "roe_ttm": k.returnOnEquityTTM,
             "roe_3y": roe_3y,
-            "roicTTM": k.roicTTM,
+            "roicTTM": k.returnOnInvestedCapitalTTM,
             "operatingMargins": r.operatingProfitMarginTTM,
-            "totalDebt": k.totalDebtTTM,
+            "totalDebt": total_debt,
             "totalCash": None,
-            "netDebt": k.netDebtTTM,
-            "ebitda": k.ebitdaTTM,
-            "freeCashflow": k.freeCashFlowTTM,
-            "forwardPE": r.priceEarningsRatioTTM,
-            "enterpriseToEbitda": r.enterpriseValueOverEBITDATTM,
-            "pegRatio": r.pegRatioTTM,
+            "netDebt": net_debt,
+            "ebitda": ebitda,
+            "freeCashflow": free_cashflow,
+            "forwardPE": r.priceToEarningsRatioTTM,
+            "enterpriseToEbitda": r.enterpriseValueMultipleTTM,
+            "pegRatio": r.priceToEarningsGrowthRatioTTM,
             "surprise_pct": surprise_pct,
             "surprise_date": surprise_date,
             "analyst_revision_3m": analyst_revision_3m,
             "mostRecentQuarter": most_recent_quarter_ts,
-            "bookValuePerShare": k.bookValuePerShareTTM,
+            "bookValuePerShare": r.bookValuePerShareTTM,
             "source": "FMP",
         }
     except FMPUnavailableError:

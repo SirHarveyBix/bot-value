@@ -14,12 +14,12 @@ scanner:
   inter_request_delay: 1.0
   max_workers_universe: 4
   fmp_api_key: ${FMP_API_KEY}
-  fmp_base_url: "https://financialmodelingprep.com/api/v3"
+  fmp_base_url: "https://financialmodelingprep.com/stable"
   shortlist_size: 30
   vix_panic_threshold: 35
   vix_warning_threshold: 25
   fmp_max_retries: 2
-  fmp_call_budget_hard_limit: 245
+  fmp_call_budget_hard_limit: 175
   yfinance_chunk_size: 100
   yfinance_chunk_delay_s: 2.0
   cache_ttl_fundamentals: 97200

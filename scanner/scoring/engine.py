@@ -137,14 +137,28 @@ def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None
         # Sanity Check Gate (baisse < -45% ou hausse > +50% journalière)
         if not sanity_check_gate(prices, symbol):
             if exclusions_out is not None:
-                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "sanity", "reason": "Variation journalière anormale (split / glitch)"})
+                exclusions_out.append(
+                    {
+                        "symbol": symbol,
+                        "name": info.get("longName", symbol),
+                        "gate": "sanity",
+                        "reason": "Variation journalière anormale (split / glitch)",
+                    }
+                )
             continue
 
         # T022: Exclusion sector=None (Lacune 7)
         if info.get("sector") is None:
             logger.warning(f"Exclusion {symbol}: sector=None (sector_missing)")
             if exclusions_out is not None:
-                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "données", "reason": "Secteur inconnu"})
+                exclusions_out.append(
+                    {
+                        "symbol": symbol,
+                        "name": info.get("longName", symbol),
+                        "gate": "données",
+                        "reason": "Secteur inconnu",
+                    }
+                )
             continue
 
         q_metrics = calculate_quality_metrics(info)
@@ -162,13 +176,17 @@ def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None
         if not q_ok:
             logger.info(f"Exclusion {symbol} (Qualité): {q_reason}")
             if exclusions_out is not None:
-                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "qualité", "reason": q_reason})
+                exclusions_out.append(
+                    {"symbol": symbol, "name": info.get("longName", symbol), "gate": "qualité", "reason": q_reason}
+                )
             continue
 
         if v_excluded:
             logger.info(f"Exclusion {symbol} (Valorisation): {v_reason}")
             if exclusions_out is not None:
-                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "valorisation", "reason": v_reason})
+                exclusions_out.append(
+                    {"symbol": symbol, "name": info.get("longName", symbol), "gate": "valorisation", "reason": v_reason}
+                )
             continue
 
         row = {

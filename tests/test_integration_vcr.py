@@ -253,7 +253,9 @@ async def test_full_pipeline_panic_regime(tmp_path):
                             with patch.object(storage_module, "JSON_PATH", json_file):
                                 with patch.object(fetcher_module, "fetch_ticker_info", side_effect=mock_fetch_ticker):
                                     with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_batch):
-                                        with patch.object(main_module, "fetch_market_indices", return_value=mock_indices):
+                                        with patch.object(
+                                            main_module, "fetch_market_indices", return_value=mock_indices
+                                        ):
                                             await main_module.run_scanner(force=True)
 
     assert panic_called, "notify_panic() doit être appelé pour VIX=40"

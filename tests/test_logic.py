@@ -721,13 +721,18 @@ def test_is_market_open_weekend():
 
 
 def test_parse_fmp_response_invalid_string():
-    """parse_fmp_response avec string 'N/A' → champ = None, pas de crash."""
+    """parse_fmp_response avec string 'N/A' → champ = None, pas de crash (API stable FMP)."""
     from scanner.fetcher import FMPRatiosTTM, _parse_fmp_response
 
-    result = _parse_fmp_response([{"priceEarningsRatioTTM": "N/A", "returnOnEquityTTM": 0.15}], FMPRatiosTTM, "TEST")
+    # API stable : priceToEarningsRatioTTM (v3 : priceEarningsRatioTTM)
+    result = _parse_fmp_response(
+        {"priceToEarningsRatioTTM": "N/A", "operatingProfitMarginTTM": 0.15},
+        FMPRatiosTTM,
+        "TEST",
+    )
     assert result is not None
-    assert result.priceEarningsRatioTTM is None
-    assert abs(result.returnOnEquityTTM - 0.15) < 1e-9
+    assert result.priceToEarningsRatioTTM is None
+    assert abs(result.operatingProfitMarginTTM - 0.15) < 1e-9
 
 
 def test_parse_fmp_response_empty():
@@ -735,6 +740,21 @@ def test_parse_fmp_response_empty():
     from scanner.fetcher import FMPRatiosTTM, _parse_fmp_response
 
     assert _parse_fmp_response([], FMPRatiosTTM, "TEST") is None
+
+
+def test_parse_fmp_response_key_metrics_list():
+    """parse_fmp_response accepte liste (key-metrics-ttm stable retourne list)."""
+    from scanner.fetcher import FMPKeyMetricsTTM, _parse_fmp_response
+
+    result = _parse_fmp_response(
+        [{"returnOnEquityTTM": 0.18, "returnOnInvestedCapitalTTM": 0.12, "freeCashFlowYieldTTM": 0.05}],
+        FMPKeyMetricsTTM,
+        "TEST",
+    )
+    assert result is not None
+    assert abs(result.returnOnEquityTTM - 0.18) < 1e-9
+    assert abs(result.returnOnInvestedCapitalTTM - 0.12) < 1e-9
+    assert abs(result.freeCashFlowYieldTTM - 0.05) < 1e-9
 
 
 # ── v1.1 T078 — Momentum volatility-adjusted ─────────────────────────────────
@@ -1099,7 +1119,7 @@ def test_etf_score_formula():
 
 
 def test_fmp_call_counter_budget():
-    """30 tickers × 7 endpoints ≤ 245 appels FMP (SC-001)."""
+    """30 tickers × 5 endpoints ≤ 175 appels FMP (SC-001, API stable FMP)."""
     import scanner.fetcher as fetcher_module
 
     fetcher_module.fmp_call_counter = 0
@@ -1113,14 +1133,14 @@ def test_fmp_call_counter_budget():
 
     async def run():
         for _t in [f"T{i}" for i in range(30)]:
-            if fetcher_module.fmp_call_counter + 7 > 245:
+            if fetcher_module.fmp_call_counter + 5 > 175:
                 break
-            fetcher_module.fmp_call_counter += 7
+            fetcher_module.fmp_call_counter += 5
 
     asyncio.run(run())
 
-    assert fetcher_module.fmp_call_counter <= 245, (
-        f"Budget FMP dépassé: {fetcher_module.fmp_call_counter} > 245 (SC-001)"
+    assert fetcher_module.fmp_call_counter <= 175, (
+        f"Budget FMP dépassé: {fetcher_module.fmp_call_counter} > 175 (SC-001)"
     )
 
 
