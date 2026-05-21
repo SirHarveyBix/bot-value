@@ -122,25 +122,25 @@ Propagation : `fetch_fmp_data()` → `fetch_ticker_info()` → `fetch_all_data()
 
 ---
 
-## FMP Endpoints Budget (30 tickers)
+## FMP Endpoints Budget (30 tickers) — API `/stable/` (BF-010)
 
-| Endpoint                                            | Appels  | Données extraites                         |
-| --------------------------------------------------- | ------- | ----------------------------------------- |
-| `ratios-ttm/{symbol}`                               | 30      | P/E, EV/EBITDA, marge op., FCF yield, PEG |
-| `key-metrics-ttm/{symbol}`                          | 30      | ROE TTM, netDebt                          |
-| `profile/{symbol}`                                  | 30      | Secteur GICS, market cap, nom             |
-| `income-statement/{symbol}?limit=3`                 | 30      | ROE moyen 3 ans                           |
-| `balance-sheet-statement/{symbol}?limit=1`          | 30      | totalDebt                                 |
-| `earnings-surprises/{symbol}`                       | 30      | surprise_pct, surprise_date               |
-| `analyst-estimates/{symbol}?period=quarter&limit=3` | 30      | analyst_revision_3m                       |
-| **Total nominal**                                   | **210** | **Marge : 40 calls pour retries ciblés**  |
+| Endpoint (`/stable/`)                                     | Appels  | Données extraites                         |
+| --------------------------------------------------------- | ------- | ----------------------------------------- |
+| `ratios-ttm?symbol={symbol}`                              | 30      | P/E, EV/EBITDA, marge op., FCF yield, PEG |
+| `key-metrics-ttm?symbol={symbol}`                         | 30      | ROIC TTM, métriques complémentaires       |
+| `profile?symbol={symbol}`                                 | 30      | Secteur GICS, market cap, nom             |
+| `income-statement?symbol={symbol}&limit=3`                | 30      | ROE moyen 3 ans (bilans annuels)          |
+| `balance-sheet-statement?symbol={symbol}&limit=3`         | 30      | totalDebt, totalCash                      |
+| ~~`earnings-surprises/{symbol}`~~                         | ~~30~~  | 404 plan gratuit — supprimé (BF-010)      |
+| ~~`analyst-estimates/{symbol}?period=quarter&limit=3`~~   | ~~30~~  | 402 plan gratuit — supprimé (BF-010)      |
+| **Total nominal**                                         | **150** | **+ 25 retry margin = 175 hard limit**    |
 
 Circuit-breaker par ticker : 2 retries max. Après 2 échecs 5xx → skip + flag pour ce ticker uniquement.
 
-**Disjoncteur global** (`FMP_CALL_BUDGET_HARD_LIMIT = 245`) : compteur `fmp_call_counter` incrémenté à chaque appel. Si `fmp_call_counter ≥ 245` → `fmp_fetch()` retourne `{}` immédiatement sans appel HTTP. Le scoring finalise avec les données disponibles. Flag `⚠️ Budget FMP proche du quota — shortlist partielle` ajouté au message Telegram.
+**Disjoncteur global** (`FMP_CALL_BUDGET_HARD_LIMIT = 175`) : compteur `fmp_call_counter` incrémenté à chaque appel. Si `fmp_call_counter ≥ 175` → `fmp_fetch()` retourne `{}` immédiatement sans appel HTTP. Le scoring finalise avec les données disponibles. Flag `⚠️ Budget FMP proche du quota — shortlist partielle` ajouté au message Telegram.
 
 ```python
-FMP_CALL_BUDGET_HARD_LIMIT = 245  # 5 calls de marge sur quota 250/jour
+FMP_CALL_BUDGET_HARD_LIMIT = 175  # 30×5=150 nominal + 25 retry margin (BF-010)
 fmp_call_counter: int = 0         # réinitialisé à chaque nouveau scan
 ```
 

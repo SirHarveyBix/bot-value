@@ -105,7 +105,7 @@ Je suis un trader position trading. Chaque matin de bourse (09h35 ET), je reçoi
 **Scénarios d'acceptation** :
 
 1. **Given** marché NYSE ouvert, **When** scan déclenché à 09h35 ET, **Then** message Telegram reçu dans les 15 minutes avec `score_global`, `score_qualite`, `score_valorisation`, `score_momentum` tous non-nuls
-2. **Given** FMP API disponible, **When** 35 tickers shortlistés, **Then** budget FMP ≤ 175 calls (5 endpoints × 35 = 175 nominaux)
+2. **Given** FMP API disponible, **When** 30 tickers shortlistés, **Then** budget FMP ≤ 175 calls (5 endpoints × 30 = 150 nominaux + 25 retry margin = 175 hard limit — BF-010)
 3. **Given** jour férié NYSE, **When** scheduler déclenche, **Then** aucun scan exécuté, aucun message Telegram envoyé
 4. **Given** FMP indisponible (clé absente ou 5xx persistant après 2 retries), **When** scan déclenché, **Then** message Telegram `⚠️ Sniper FMP indisponible` envoyé, aucun signal émis
 5. **Given** message Telegram > 4096 chars, **When** envoi, **Then** message tronqué avec `[message tronqué]` — pas d'erreur API Telegram
@@ -178,8 +178,8 @@ ETFs scorés sur momentum pur (sector rotation), pipeline et section Telegram s�
 - `book_value_per_share ≤ 0` : ticker exclu du pilier Qualité (ROE mathématiquement sans sens)
 - `ROE > 150%` avec `book_value_per_share < 5$` : flag `⚠️ ROE possiblement gonflé par buybacks`, score ROE plafonné au percentile 80
 - `EBITDA ≤ 0` ou `Dette/EBITDA > 6x` : exclusion inconditionnelle
-- `P/E Forward absent (~40-60% des tickers)` : fallback P/E TTM avec pénalité -5 pts sur pilier Valorisation
-- `P/E Forward ET P/E TTM absents` : pilier Valorisation exclu, repondération `Qualité × 0.50 + Momentum × 0.50`
+- `P/E Forward absent` : FMP stable retourne `priceToEarningsRatioTTM` sous la clé `forwardPE` — pas de fallback distinct, pas de pénalité -5pts (BF-018 : `trailingPE` supprimé). Si `forwardPE = None` ET `ev_ebitda` absent → repondération `Qualité × 0.50 + Momentum × 0.50`
+- `P/E Forward ET EV/EBITDA absents` : pilier Valorisation exclu, repondération `Qualité × 0.50 + Momentum × 0.50`
 - Secteurs Financials / Real Estate / Utilities : exclusion Dette/EBITDA du pilier Qualité
 - Biotech (Health Care, marketCap < 5B$) : gate P/E négatif suspendu
 - Earnings dans les 14 prochains jours : tag `📅 Earnings à venir` (informatif, non bloquant)
@@ -192,11 +192,11 @@ ETFs scorés sur momentum pur (sector rotation), pipeline et section Telegram s�
 - **FR-001** : Le scan DOIT s'exécuter uniquement les jours de bourse NYSE (via `pandas_market_calendars`)
 - **FR-002** : Le Market Gate DOIT évaluer VIX et SPY/EMA200 en priorité absolue avant tout scoring
 - **FR-003** : `yfinance` NE DOIT PAS être utilisé pour ROE, marges, FCF, ou toute donnée bilancielle
-- **FR-004** : FMP DOIT être utilisé pour les 5 endpoints de la shortlist (35 tickers max, 175 calls nominaux) — `earnings-surprises` et `analyst-estimates` supprimés (indisponibles plan gratuit)
+- **FR-004** : FMP DOIT être utilisé pour les 5 endpoints de la shortlist (30 tickers, SHORTLIST_SIZE non négociable, 150 calls nominaux + 25 retry margin = 175 hard limit) — `earnings-surprises` et `analyst-estimates` supprimés (indisponibles plan gratuit, BF-010)
 - **FR-005** : Si FMP indisponible → Telegram `⚠️ Sniper FMP indisponible` + scan arrêté — aucun fallback yfinance fondamentaux
 - **FR-006** : Scoring Actions = 3 piliers (Qualité 35%, Valorisation 30%, Momentum 35%) avec percentile ranking
-- **FR-007** : Scoring Momentum = 5 critères incluant révision estimations analystes (FMP `analyst-estimates`)
-- **FR-008** : Earnings Surprise DOIT avoir décroissance temporelle linéaire sur 90 jours post-résultats
+- **FR-007** : Scoring Momentum = 5 critères nominaux. `analyst-estimates` (FMP) indisponible plan gratuit — critère score 0 pour tous les tickers (impact symétrique, ranking relatif préservé). Log `WARNING: analyst-estimates indisponible` requis.
+- **FR-008** : Earnings Surprise DOIT avoir décroissance temporelle linéaire sur 90 jours post-résultats. `earnings-surprises` (FMP) indisponible plan gratuit — critère score 0 pour tous les tickers (impact symétrique). Décroissance applicable si endpoint redevient disponible (upgrade plan FMP).
 - **FR-009** : Ranking intra-secteur DOIT basculer en cross-universe si secteur a < 3 tickers dans la shortlist
 - **FR-010** : Tous les messages Telegram DOIVENT être html.escape()'és et tronqués à 4096 chars max
 - **FR-011** : SQLite WAL mode OBLIGATOIRE pour l'accès concurrent bot/dashboard
@@ -204,7 +204,7 @@ ETFs scorés sur momentum pur (sector rotation), pipeline et section Telegram s�
 
 ### Critères de Succès Mesurables
 
-- **SC-001** : Budget FMP ≤ 250 calls/jour en conditions nominales
+- **SC-001** : Budget FMP ≤ 175 calls/run en conditions nominales (30 × 5 endpoints = 150 nominal + 25 retry margin — BF-010)
 - **SC-002** : Durée totale du scan ≤ 15 minutes de 09h35 ET à réception Telegram
 - **SC-003** : `score_global` ∈ [0, 100] pour chaque ticker du Top 10, jamais NaN
 - **SC-004** : Aucun scan ne crash silencieusement — toute erreur critique produit un message Telegram
@@ -271,25 +271,25 @@ Pour maximiser l'univers tout en garantissant la qualité institutionnelle des s
 
 > **Bénéfice** : Cette méthode protège contre le rate-limiting de yfinance (car les appels `.info` sont limités à 50) et contre l'imprécision des données gratuites sur les actions que vous allez réellement acheter.
 
-> **Contrainte FMP free tier (250 calls/jour) — CRITIQUE** : Le tier gratuit FMP est **limité à 250 appels/jour**, sans possibilité d'upgrade. Budget alloué par run :
+> **Contrainte FMP free tier (250 calls/jour) — CRITIQUE** : Le tier gratuit FMP est **limité à 250 appels/jour**, sans possibilité d'upgrade. Budget alloué par run (BF-010 : migration v3→stable, 2 endpoints supprimés) :
 >
-> | Endpoint FMP (`/stable/`)                         | Appels (35 tickers) | Objet                                              |
+> | Endpoint FMP (`/stable/`)                         | Appels (30 tickers) | Objet                                              |
 > | ------------------------------------------------- | ------------------- | -------------------------------------------------- |
-> | `ratios-ttm?symbol={symbol}`                      | 35                  | P/E, EV/EBITDA, marge op., FCF yield, dette/EBITDA |
-> | `key-metrics-ttm?symbol={symbol}`                 | 35                  | ROIC TTM, métriques complémentaires                |
-> | `profile?symbol={symbol}`                         | 35                  | Secteur GICS, market cap, description              |
-> | `income-statement?symbol={symbol}&limit=3`        | 35                  | ROE moyen 3 ans (bilans annuels)                   |
-> | `balance-sheet-statement?symbol={symbol}&limit=3` | 35                  | Bilan : totalDebt, totalCash                       |
+> | `ratios-ttm?symbol={symbol}`                      | 30                  | P/E, EV/EBITDA, marge op., FCF yield, dette/EBITDA |
+> | `key-metrics-ttm?symbol={symbol}`                 | 30                  | ROIC TTM, métriques complémentaires                |
+> | `profile?symbol={symbol}`                         | 30                  | Secteur GICS, market cap, description              |
+> | `income-statement?symbol={symbol}&limit=3`        | 30                  | ROE moyen 3 ans (bilans annuels)                   |
+> | `balance-sheet-statement?symbol={symbol}&limit=3` | 30                  | Bilan : totalDebt, totalCash                       |
 > | ~~`earnings-surprises`~~                          | ~~indisponible~~    | 404 plan gratuit — supprimé (BF-010)               |
 > | ~~`analyst-estimates`~~                           | ~~indisponible~~    | 402 plan gratuit — supprimé (BF-010)               |
-> | **Total**                                         | **175 calls/run**   | Budget exact sans marge retries                    |
+> | **Total**                                         | **150 calls/run**   | Nominal — + 25 retry margin = **175 hard limit**   |
 >
-> **SHORTLIST_SIZE = 35 tickers** : 35 × 5 endpoints = 175 calls nominaux. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag. Avec cache 27h actif, les retries concernent une minorité de tickers.
+> **SHORTLIST_SIZE = 30 tickers** : 30 × 5 endpoints = 150 calls nominaux + 25 retry margin = **175 hard limit**. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag. Avec cache 27h actif, les retries concernent une minorité de tickers.
 >
-> **Disjoncteur global FMP (hard limit 175 calls)** : Le système DOIT maintenir un compteur global d'appels FMP par run (`fmp_call_counter`). Dès que ce compteur atteint **175 calls**, les fetches FMP des tickers restants sont interrompus immédiatement. Le scoring et le ranking sont finalisés avec les données disponibles à ce moment. Un flag `⚠️ Budget FMP proche du quota — shortlist partielle` est ajouté au message Telegram. Budget exact : 35 tickers × 5 endpoints = 175 calls max (BF-010 : API v3 → stable, 7→5 endpoints).
+> **Disjoncteur global FMP (hard limit 175 calls)** : Le système DOIT maintenir un compteur global d'appels FMP par run (`fmp_call_counter`). Dès que ce compteur atteint **175 calls**, les fetches FMP des tickers restants sont interrompus immédiatement. Le scoring et le ranking sont finalisés avec les données disponibles à ce moment. Un flag `⚠️ Budget FMP proche du quota — shortlist partielle` est ajouté au message Telegram. Budget : 30 tickers × 5 endpoints = 150 nominal + 25 retry margin = 175 hard limit (BF-010 : API v3→stable, 7→5 endpoints).
 >
 > ```python
-> FMP_CALL_BUDGET_HARD_LIMIT = 175  # Disjoncteur — 35 tickers × 5 endpoints (BF-010)
+> FMP_CALL_BUDGET_HARD_LIMIT = 175  # Disjoncteur — 30 × 5 = 150 nominal + 25 retry margin (BF-010)
 >
 > fmp_call_counter = 0
 >
@@ -400,7 +400,7 @@ Le système applique un **Rate Limiting Séquentiel** strict pour éviter le ban
 
 1. **Délai asynchrone jittered** : Entre chaque appel `.info` (yfinance) ou API (FMP), un délai aléatoire compris entre **0.8s et 1.5s** (`await asyncio.sleep(random.uniform(0.8, 1.5))`) est observé pour simuler un comportement humain et éviter le bannissement IP.
 2. **INTER_REQUEST_DELAY** : Fixé à 1.0s par défaut pour garantir la pérennité de l'accès Yahoo Finance.
-3. **FMP_MAX_RETRIES** : **2 tentatives maximum** avec backoff exponentiel asynchrone (cf. §2 budget FMP — 3 retries dépasserait le budget 250 calls).
+3. **FMP_MAX_RETRIES** : **2 tentatives maximum** avec backoff exponentiel asynchrone (cf. §2 budget FMP — 3 retries dépasserait le hard limit 175 calls).
 4. **Aucun fallback FMP → yfinance** : Si FMP échoue après 2 retries pour un ticker, le ticker est ignoré (skip + flag dans les logs). La Règle d'Or est absolue — voir §16 contrainte 1.
 
 ### 2.3 Validation des données reçues
@@ -460,7 +460,7 @@ CACHE_TTL_FUNDAMENTALS = 27 * 3600   # 27h — voir note race condition ci-desso
 CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
 ```
 
-> **⚠️ Race condition TTL à 24h** : Le scan se déclenche à 09h35 ET. Un cache créé à 09h32 la veille expire exactement à 09h32 le lendemain — 3 minutes _avant_ le prochain scan. Toute la shortlist de 30 tickers déclenche simultanément 210 appels FMP à 09h35 ET, annulant le bénéfice du cache et consommant l'intégralité du quota en un seul run. TTL à **27h** garantit que le cache reste valide pour le scan suivant, quel que soit le délai d'exécution réel (congestion réseau, retry, heure d'été/hiver). La valeur `97200s` (27×3600) est la valeur de référence dans `config.yaml`.
+> **⚠️ Race condition TTL à 24h** : Le scan se déclenche à 09h35 ET. Un cache créé à 09h32 la veille expire exactement à 09h32 le lendemain — 3 minutes _avant_ le prochain scan. Toute la shortlist de 30 tickers déclenche simultanément 150 appels FMP à 09h35 ET (5 endpoints × 30), annulant le bénéfice du cache et consommant la majeure partie du quota en un seul run. TTL à **27h** garantit que le cache reste valide pour le scan suivant, quel que soit le délai d'exécution réel (congestion réseau, retry, heure d'été/hiver). La valeur `97200s` (27×3600) est la valeur de référence dans `config.yaml`.
 
 **Invalidation post-earnings** : si un ticker est dans l'earnings calendar avec date = J-1 (résultats publiés la veille), son cache fondamentaux est invalidé forcément avant le scan.
 
@@ -612,11 +612,11 @@ def winsorize(value: float, low: float, high: float) -> float:
 
 > **Gestion données manquantes** :
 >
-> - **P/E Forward absent (cas fréquent, ~40-60% des tickers yfinance)** → utiliser P/E TTM **par défaut** (pas comme fallback exceptionnel) avec pénalité de -5 points sur le **score pilier Valorisation**. Si P/E TTM aussi négatif → appliquer le gate P/E négatif normalement.
+> - **P/E Forward absent** : FMP stable retourne `priceToEarningsRatioTTM` sous la clé `forwardPE` — pas de fallback distinct, pas de pénalité -5pts (BF-018 : `trailingPE` supprimé). Si `forwardPE = None` ET EV/EBITDA absent → repondération `Qualité × 0.50 + Momentum × 0.50`. Si `forwardPE = None` mais EV/EBITDA disponible → pilier Valorisation scoré sur EV/EBITDA seul.
 > - Aucun P/E disponible → pilier Valorisation exclu. Score global recalculé : `score_qualite * 0.50 + score_momentum * 0.50` (renormalisé sur 100). Flag `⚠️ Valorisation non calculée` ajouté.
 > - PEG Ratio absent (fréquent) → critère PEG exclu du pilier. Les 20% sont redistribués : P/E Forward → 56%, EV/EBITDA → 44%.
 >
-> **Pourquoi P/E TTM comme défaut** : En pratique, yfinance retourne `forwardPE = None` pour 40 à 60% des tickers, ce qui en fait l'exception plutôt que la règle. Traiter le TTM comme fallback "dégradé" introduit une incohérence : certains tickers sont scorés sur Forward, d'autres sur TTM, sans que le classement le reflète clairement. La pénalité -5 pts sur le pilier Valorisation est conservée pour signaler que la précision est moindre (P/E TTM regarde le passé, pas les bénéfices futurs attendus).
+> **Pourquoi pas de pénalité P/E TTM** : FMP stable n'expose pas de P/E Forward distinct — `priceToEarningsRatioTTM` est retourné sous la clé `forwardPE` dans `ratios-ttm`. La distinction yfinance forwardPE/trailingPE ne s'applique pas à FMP stable (BF-018 : `trailingPE` dead code supprimé lors de la migration v3→stable).
 >
 > **Règle NaN dans percentile ranking** : tout sous-critère avec valeur NaN ou manquante est exclu du calcul du percentile pour ce ticker. Si plus de 2 sous-critères d'un pilier sont NaN, le pilier entier est exclu (voir logique de repondération ci-dessus).
 
@@ -630,8 +630,8 @@ def winsorize(value: float, low: float, high: float) -> float:
 | Performance 6 mois _(v1.0)_         | `(Prix J0 - Prix J-126) / Prix J-126`             | yfinance                 | Cross-universe |
 | Surperformance sectorielle 6M       | Perf 6M ticker - Perf 6M ETF sectoriel SPDR       | yfinance                 | Intra-secteur  |
 | Performance 3 mois                  | `(Prix J0 - Prix J-63) / Prix J-63`               | yfinance                 | Cross-universe |
-| Surprise Earnings % (Sniper)        | (BPA Publié - BPA Attendu) / BPA Attendu          | FMP `earnings-surprises` | Cross-universe |
-| Révision estimations analystes 3M   | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates`  | Cross-universe |
+| Surprise Earnings % (Sniper)        | (BPA Publié - BPA Attendu) / BPA Attendu          | FMP `earnings-surprises` _(indisponible plan gratuit — BF-010, score = 0)_ | Cross-universe |
+| Révision estimations analystes 3M   | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates` _(indisponible plan gratuit — BF-010, score = 0)_  | Cross-universe |
 
 > **_(v1.1)_ Momentum ajusté par la volatilité (Daniel & Moskowitz, 2016)** : Un momentum "brut" expose au _Momentum Crash_ — des actifs en hausse parabolique (momentum élevé + volatilité élevée) s'effondrent brutalement lors des retournements. Diviser la performance brute par l'écart-type quotidien récompense les tendances régulières et pénalise les hausses spéculatives.
 >
@@ -671,7 +671,7 @@ def winsorize(value: float, low: float, high: float) -> float:
 >
 > **Pourquoi** : Sans cette décroissance, une entreprise ayant battu les attentes en octobre continue d'être récompensée en janvier pour un signal dont le marché a déjà fait le prix. La Révision estimations n'a pas de décroissance — les révisions d'analystes reflètent une conviction continue, pas un événement ponctuel.
 >
-> **Fallback si `analyst-estimates` inaccessible (FMP free tier)** : Le plan gratuit FMP peut restreindre l'endpoint `analyst-estimates` (HTTP 403). Si cet endpoint retourne une erreur ou une liste vide, `analyst_revision_3m = None` pour tous les tickers. Dans ce cas, `rank_analyst_revision` = NaN → score contribue `0 × w_revision` via `(row.get("rank_analyst_revision") or 0)`. L'impact est **symétrique** (tous les tickers perdent ce critère également) : le classement relatif est préservé, seul le score absolu est réduit de 10% uniformément. Aucune action corrective n'est nécessaire — ce comportement est acceptable pour le ranking percentile. Log `WARNING: analyst-estimates indisponible — critère revision exclu de ce run` à émettre.
+> **Fallback si `analyst-estimates` inaccessible (FMP free tier)** : Le plan gratuit FMP peut restreindre l'endpoint `analyst-estimates` (HTTP 403). Si cet endpoint retourne une erreur ou une liste vide, `analyst_revision_3m = None` pour tous les tickers. Dans ce cas, `rank_analyst_revision` = NaN → score contribue `0 × w_revision` via le helper `_sv()` (None/NaN → 0.0, BF-015). L'impact est **symétrique** (tous les tickers perdent ce critère également) : le classement relatif est préservé, seul le score absolu est réduit de 10% uniformément. Aucune action corrective n'est nécessaire — ce comportement est acceptable pour le ranking percentile. Log `WARNING: analyst-estimates indisponible — critère revision exclu de ce run` à émettre.
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
 
@@ -1459,7 +1459,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import httpx
 
 # Circuit-breaker implicite : si > 2 retries sur un ticker → skip, pas de 3ème tentative
-# (contrainte budget FMP 250 calls/jour — cf. §2)
+# (contrainte budget FMP 175 calls hard limit — cf. §2, BF-010)
 @retry(
     retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
     stop=stop_after_attempt(2),          # FMP_MAX_RETRIES = 2
@@ -1472,11 +1472,11 @@ async def fmp_fetch_with_tenacity(client: httpx.AsyncClient, url: str) -> dict:
     return response.json()
 ```
 
-> **Pourquoi tenacity vs retry manuel** : tenacity gère le jitter automatiquement et est composable avec d'autres décorateurs. Le `stop_after_attempt(2)` est synchronisé avec `FMP_MAX_RETRIES = 2` du §2 pour ne pas dépasser le budget 250 calls.
+> **Pourquoi tenacity vs retry manuel** : tenacity gère le jitter automatiquement et est composable avec d'autres décorateurs. Le `stop_after_attempt(2)` est synchronisé avec `FMP_MAX_RETRIES = 2` du §2 pour ne pas dépasser le hard limit 175 calls (BF-010).
 
 ### 13.2 Cache des données fondamentales
 
-Les données fondamentales (P/E, ROE, marges) ne changent pas d'un jour à l'autre entre les publications de résultats. Le fetcher les met en cache pour éviter d'épuiser les 250 calls FMP/jour sur des données déjà récupérées.
+Les données fondamentales (P/E, ROE, marges) ne changent pas d'un jour à l'autre entre les publications de résultats. Le fetcher les met en cache pour éviter d'épuiser les 175 calls hard limit par run (BF-010) sur des données déjà récupérées.
 
 ```python
 # Règle de cache — TTL 27h pour éviter la race condition à 24h
@@ -1588,8 +1588,8 @@ Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de 
 | `DATA_FRESHNESS_EXCLUSION_DAYS` | 180               | [120, 365]                                                        | §5.1         |
 | `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                     | §3.2         |
 | `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                        | §3bis.2.1    |
-| `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le budget 250 calls            | §2           |
-| `FMP_CALL_BUDGET_HARD_LIMIT`    | 175               | 35 × 5 endpoints = 175 max (BF-010 : migration API stable)        | §2           |
+| `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le hard limit 175 calls (BF-010) | §2         |
+| `FMP_CALL_BUDGET_HARD_LIMIT`    | 175               | 30 × 5 = 150 nominal + 25 retry margin = 175 hard limit (BF-010)  | §2           |
 | `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429          | §3bis.2.1    |
 | `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                          | §3bis.2.1    |
 | `CACHE_TTL_FUNDAMENTALS`        | 97200s (27h)      | [86400, 172800] — **min 27h** pour éviter race condition 09h35    | §3bis.2.4    |

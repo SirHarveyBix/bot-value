@@ -198,7 +198,7 @@ async def fetch_fmp_data(client, symbol):
     URL format stable : ?symbol={symbol}&apikey={key} (pas de path param).
     5 endpoints (earnings-surprises 404, analyst-estimates 402 sur plan gratuit).
     Lève FMPUnavailableError si clé absente ou 5xx persistant (tenacity, 2 retries max).
-    Respecte le disjoncteur global fmp_call_counter (hard limit 175 calls/run = 35×5).
+    Respecte le disjoncteur global fmp_call_counter (hard limit 175 = 30×5=150 nominal + 25 retry margin — BF-010).
     """
     global fmp_call_counter
 

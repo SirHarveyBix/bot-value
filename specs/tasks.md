@@ -86,7 +86,7 @@
 - [x] T037 [US1] Implémenter `save_scan(conn, scan_data)` et `save_signals(conn, signals_list)` dans `storage.py` : `first_seen_date` = date courante si nouveau ticker, conservée si réapparition (query `SELECT first_seen_date FROM signals WHERE ticker=? ORDER BY scan_date ASC LIMIT 1`)
 - [x] T038 [US1] Câbler pipeline complet dans `main.py` : `build_eligible_universe` → MIN_UNIVERSE check → momentum score Chalutier → Top 30 → `fetch_fmp_fundamentals` (avec disjoncteur) → `stock_scoring_pipeline` → Top 10 → `save_scan` + `save_signals` → `send_signals`
 - [x] T039 [P] [US1] Test intégration (VCR + Freezegun mercredi 10h00 ET) : pipeline complet → 1 entrée `scans`, 10 entrées `signals`, `score_global` ∈ [0,100] pour chaque ticker, jamais NaN
-- [x] T040 [P] [US1] Test budget FMP : mock `fmp_call_counter`, run 35 tickers → assert `fmp_call_counter ≤ 175` (SC-001) — 35 × 5 endpoints = 175 max
+- [x] T040 [P] [US1] Test budget FMP : mock `fmp_call_counter`, run 30 tickers → assert `fmp_call_counter ≤ 175` (SC-001) — 30 × 5 = 150 nominal + 25 retry margin = 175 hard limit (BF-010)
 
 **Checkpoint** : `python main.py --now --force` → message Telegram reçu dans les 15 min avec Top 10, scores non-nuls. Budget FMP ≤ 175. Scanner v1.0 MVP fonctionnel.
 
@@ -150,7 +150,7 @@
 - [x] T059 [P] Créer `tests/test_logic.py` complet : tests statiques scoring — `apply_quality_gates` (BVS ≤ 0, ROE None, ROE < 0, ROE > 150% + BVS < 5$ cap), decay earnings clampé [0,1], pénalités anti-extrême, winsorisation `RATIO_CLAMP`, `evaluate_market_regime` 4 scénarios
 - [x] T060 [P] Créer `tests/test_fetcher_vcr.py` : connecteurs yfinance chunked (chunk size 100, 2 cassettes) + FMP 5 endpoints (cassette par ticker) + disjoncteur 175 (mock counter)
 - [x] T061 Créer `tests/test_integration_vcr.py` : pipeline complet (VCR + Freezegun) — scan complet → `scans` + `signals` écrits, Market Gate PANIC → 0 signaux, FMP indisponible → Telegram erreur + 0 signaux
-- [x] T062 Test mock FMP call counter : run complet 35 tickers via fixtures → assert `fmp_call_counter ≤ 175` (SC-001)
+- [x] T062 Test mock FMP call counter : run complet 30 tickers via fixtures → assert `fmp_call_counter ≤ 175` (SC-001 — 30 × 5 = 150 nominal + 25 retry margin, BF-010)
 - [x] T063 [P] Vérifier exhaustivement `html.escape()` dans `notifier.py` : fixtures AT&T, Johnson & Johnson, tout nom avec `<>/&` → chaînes correctement escapées dans message final
 - [x] T064 [P] Documenter setup Mac Mini dans `README.md` section "Déploiement" : `pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0`, clone + venv + pip install, `supervisord -c supervisord.conf`
 - [x] T065 Créer script bash `scripts/install-launchd.sh` : génère `~/Library/LaunchAgents/com.valuemomentum.plist` depuis `PROJECT_DIR="$(pwd)"`, `launchctl load "$PLIST"` — flag `-n` obligatoire pour `KeepAlive`

@@ -22,9 +22,9 @@ Scanner quotidien quantitatif pour Position Trading (horizon 3–6 mois). Archit
 
 **Project Type**: Service autonome (scanner + notifier) — pas de web API en v1.0
 
-**Performance Goals**: Scan complet ≤ 15 min de 09h35 ET à réception Telegram ; Budget FMP ≤ 245 calls/run (disjoncteur hard limit)
+**Performance Goals**: Scan complet ≤ 15 min de 09h35 ET à réception Telegram ; Budget FMP ≤ 175 calls/run (disjoncteur hard limit — 30 × 5 = 150 nominal + 25 retry margin, BF-010)
 
-**Constraints**: FMP free tier 250 calls/jour strict ; SHORTLIST_SIZE = 30 non négociable ; yfinance chunks ≤ 100 tickers + pause 2s ; CACHE_TTL_FUNDAMENTALS = 97200s (27h, anti race condition) ; SQLite local uniquement
+**Constraints**: FMP free tier 250 calls/jour strict ; SHORTLIST_SIZE = 30 non négociable ; hard limit 175 calls/run (BF-010) ; yfinance chunks ≤ 100 tickers + pause 2s ; CACHE_TTL_FUNDAMENTALS = 97200s (27h, anti race condition) ; SQLite local uniquement
 
 **Scale/Scope**: ~700 tickers univers, 30 shortlist, 10 signaux Top Actions + 5 ETFs/jour
 
@@ -39,7 +39,7 @@ _GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 - [x] **V. Quantitative Momentum**: 5 sub-criteria — Perf 6M (30%), Surperf sectorielle 6M (30%), Perf 3M (15%), Earnings Surprise avec décroissance linéaire 90j (15%), Révision analystes 3M (10%). Pénalités anti-extrême : 1M > +25% → -10 pts, 1M < -20% → -5 pts sur score momentum final.
 - [x] **VI. Sector GICS Integrity**: `sector = None` → exclu avec log `sector_missing`. Sectors < 3 tickers dans shortlist → cross-universe fallback pour métriques intra-secteur. MIN_UNIVERSE_SIZE = 100 vérifié sur l'univers complet post-éligibilité Chalutier (avant shortlisting à 30) — vérification dans `main.py` après `build_eligible_universe()`, pas dans `stock_scoring_pipeline()`.
 - [x] **VII. Signal Persistence**: `first_seen_date` jamais réinitialisée à la réapparition. Sortie du Top 10 par score uniquement (pas de rotation calendaire). Signal persistant > 90 jours = conviction, pas anomalie.
-- [x] **Technical Standards**: SQLite WAL activé (`PRAGMA journal_mode=WAL`). APScheduler 4.x async (même event loop que Telegram + httpx). Jitter 0.8–1.5s entre tous les appels externes. FMP 2 retries max + disjoncteur global 245 calls. `html.escape()` obligatoire sur toutes les chaînes dans messages Telegram. Truncation 4096 chars.
+- [x] **Technical Standards**: SQLite WAL activé (`PRAGMA journal_mode=WAL`). APScheduler 4.x async (même event loop que Telegram + httpx). Jitter 0.8–1.5s entre tous les appels externes. FMP 2 retries max + disjoncteur global 175 calls (BF-010). `html.escape()` obligatoire sur toutes les chaînes dans messages Telegram. Truncation 4096 chars.
 - [x] **Quality Gates**: VCR.py cassettes pour tous les tests réseau (isolation complète, 0 appel API live par défaut). Freezegun pour toute logique temporelle (NYSE calendar, freshness, earnings decay, fenêtre earnings).
 
 ## Project Structure
@@ -68,7 +68,7 @@ valuemomentum-scanner/
 │   ├── universe.py              # Module 1 : Universe Builder + refresh auto
 │   ├── fetcher.py               # Module 2 : Data Fetcher
 │   │                              — yfinance OHLCV chunked (100 tickers, pause 2s)
-│   │                              — FMP httpx.AsyncClient + cache 27h + disjoncteur 245 calls
+│   │                              — FMP httpx.AsyncClient + cache 27h + disjoncteur 175 calls (BF-010)
 │   │                              — Validation None-safe de toutes les données externes
 │   ├── scoring/
 │   │   ├── __init__.py
@@ -125,7 +125,7 @@ Décisions architecturales documentées dans `Spec_ValueMomentum_Scanner.md` §P
 
 | Fichier              | Contenu                                                                                                        |
 | -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `config.yaml`        | Toutes les constantes (SHORTLIST_SIZE=30, VIX thresholds, TTL cache 97200s, chunk sizes, FMP budget 245, etc.) |
+| `config.yaml`        | Toutes les constantes (SHORTLIST_SIZE=30, VIX thresholds, TTL cache 97200s, chunk sizes, FMP budget 175, etc.) |
 | `.env.example`       | Template secrets (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, FMP_API_KEY)                                           |
 | `requirements.txt`   | Dépendances épinglées (voir §10 spec)                                                                          |
 | `scanner/storage.py` | Création tables SQLite WAL : `scans`, `signals`, `scanned_universe`, `universe_metadata`                       |
@@ -191,13 +191,13 @@ Décisions architecturales documentées dans `Spec_ValueMomentum_Scanner.md` §P
 
 ### Phase 4 — Sniper FMP + Scoring Engine
 
-**Objectif** : Fetch fondamentaux FMP (7 endpoints × 30 tickers), scoring 3 piliers, ranking.
+**Objectif** : Fetch fondamentaux FMP (5 endpoints × 30 tickers = 150 nominal, hard limit 175 — BF-010), scoring 3 piliers, ranking.
 
 **Fichiers à créer/compléter** :
 
 | Fichier                        | Contenu clé                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `scanner/fetcher.py`           | `fetch_fmp_fundamentals(ticker)` : 7 endpoints httpx, cache 27h, disjoncteur 245 calls, 2 retries max |
+| `scanner/fetcher.py`           | `fetch_fmp_fundamentals(ticker)` : 5 endpoints httpx, cache 27h, disjoncteur 175 calls (BF-010), 2 retries max |
 | `scanner/scoring/quality.py`   | ROE 3Y (FMP only), gates BVS, cap ROE > 150%, winsorisation, exclusion Financials/RE/Utilities        |
 | `scanner/scoring/valuation.py` | P/E Forward (FMP), EV/EBITDA, PEG ; fallback P/E TTM -5pts ; repondération si pilier absent           |
 | `scanner/scoring/momentum.py`  | 5 critères, décroissance earnings 90j, pénalités anti-extrême ±1M                                     |
@@ -213,7 +213,7 @@ Décisions architecturales documentées dans `Spec_ValueMomentum_Scanner.md` §P
 
 **Critères d'acceptation** :
 
-- SC-001 : Budget FMP ≤ 245 calls sur run complet 30 tickers (mock call counter dans tests)
+- SC-001 : Budget FMP ≤ 175 calls sur run complet 30 tickers (mock call counter dans tests — 30 × 5 = 150 nominal + 25 retry margin, BF-010)
 - SC-003 : `score_global` ∈ [0, 100] pour chaque ticker, jamais NaN
 - `apply_quality_gates` : tests ROE TTM refusé, BVS ≤ 0 exclu, ROE > 150% + BVS < 5$ → cap 80
 
@@ -305,7 +305,7 @@ Décisions architecturales documentées dans `Spec_ValueMomentum_Scanner.md` §P
 
 - VCR.py : `record_mode="none"` par défaut (jamais d'appels live), cassettes dans `tests/cassettes/`
 - Freezegun : fixé à mercredi 10:00 ET (NYSE ouvert) pour tous les tests temporels
-- Mock FMP call counter : assertion que run complet 30 tickers ≤ 245 calls (SC-001)
+- Mock FMP call counter : assertion que run complet 30 tickers ≤ 175 calls (SC-001 — 30 × 5 = 150 nominal + 25 retry margin, BF-010)
 
 **Critères d'acceptation** :
 
@@ -358,7 +358,7 @@ python main.py --now --force
 | Constante                    | Valeur | Note                              |
 | ---------------------------- | ------ | --------------------------------- |
 | `SHORTLIST_SIZE`             | 30     | Hard max (budget FMP)             |
-| `FMP_CALL_BUDGET_HARD_LIMIT` | 245    | Disjoncteur global                |
+| `FMP_CALL_BUDGET_HARD_LIMIT` | 175    | Disjoncteur global (30 × 5 = 150 nominal + 25 retry margin — BF-010) |
 | `FMP_MAX_RETRIES`            | 2      | Hard max                          |
 | `YFINANCE_CHUNK_SIZE`        | 100    | Tickers par batch                 |
 | `YFINANCE_CHUNK_DELAY_S`     | 2.0    | Pause inter-chunks                |
@@ -374,7 +374,7 @@ python main.py --now --force
 | Risque                         | Mitigation spécifiée                                          |
 | ------------------------------ | ------------------------------------------------------------- |
 | yfinance HTTP 429              | Chunks 100 + pause 2s + `threads=False` (§3bis.2.1)           |
-| FMP quota 250/jour             | Disjoncteur 245 calls + cache 27h (§2, §3bis.2.4)             |
+| FMP quota 250/jour             | Disjoncteur 175 calls + cache 27h (§2, §3bis.2.4 — BF-010)   |
 | Race condition cache           | TTL 27h vs 24h (§3bis.2.4)                                    |
 | Survivorship bias backtesting  | Table `scanned_universe` complète (§7.2)                      |
 | Ratios aberrants (parsing FMP) | Winsorisation `RATIO_CLAMP` avant percentile (§4.1)           |

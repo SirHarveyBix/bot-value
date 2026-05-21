@@ -1,20 +1,26 @@
 <!--
-SYNC IMPACT REPORT — 2026-05-21
-Version change: 1.1.0 → 1.1.1 (PATCH: non-semantic clarifications, missing quality gates documented, consistency fixes)
+SYNC IMPACT REPORT — 2026-05-22
+Version change: 1.1.1 → 1.1.2 (PATCH: FMP budget correction post-BF-010, suppressed endpoints documented)
 
 Modified principles:
-- II. Quality & Stability → added book_value_per_share gates (≤ 0 → exclude; ROE > 150% + BVS < $5 → cap percentile 80 + flag), added Utilities to debt/EBITDA exclusion sector list
-- VI. Sector GICS Integrity → clarified that MIN_UNIVERSE_SIZE = 100 applies to the full post-eligibility Chalutier universe (before shortlisting to 30), not to the shortlist itself
-
-Added sections:
-- ETF Pipeline note in Principle I: sector rotation momentum framing (not value), leveraged ETF exclusion requirement
+- I. Funnel Architecture → FMP budget updated: 30 × 5 endpoints = 150 calls nominal + 25 retry margin = 175 hard limit (was 30 × 7 = 210 nominal, 245 disjoncteur). Reflects BF-010: migration FMP v3 → stable removed earnings-surprises (404) and analyst-estimates (402) from free tier.
+- V. Quantitative Momentum → earnings-surprises and analyst-estimates documented as unavailable on FMP free tier. Both criteria score 0 for all tickers (symmetric impact — relative ranking preserved). Weight redistributed automatically via _sv() helper at runtime.
+- Technical Standards → FMP Budget Monitoring gate corrected: hard limit 175 calls (was 250).
 
 Templates requiring update:
 - ✅ .specify/memory/constitution.md (this file)
-- ✅ .specify/templates/plan-template.md — Constitution Check items VI/VII corrected (Sector GICS Integrity / Signal Persistence); Technical Standards and Quality Gates added as separate checklist items
+- ✅ specs/spec.md — SC-001, FR-004, FR-007, FR-008, edge cases, §2 table, §4.1 table, §13.1, §13.2, §17
+- ✅ specs/plan.md — Performance Goals, Constitution Check, Phase 4, Phase 8, Constants table, Risks
+- ✅ specs/tasks.md — T040, T062
+- ✅ scanner/fetcher.py — ligne 201 commentaire disjoncteur
+
+Previous amendment (v1.1.1 — 2026-05-21):
+- II. Quality & Stability → added book_value_per_share gates, added Utilities to debt/EBITDA exclusion sector list
+- VI. Sector GICS Integrity → clarified MIN_UNIVERSE_SIZE = 100 applies to post-eligibility universe
 
 Follow-up TODOs:
 - Backtest framework (v1.1 roadmap): out-of-sample signal validation over 6M horizon
+- Si upgrade plan FMP disponible : réactiver earnings-surprises + analyst-estimates, revenir à Principe V plein (amendment v1.1.x)
 -->
 
 # ValueMomentum Scanner Constitution
@@ -25,7 +31,7 @@ Follow-up TODOs:
 ### I. Funnel Architecture & FMP/yfinance Strict Separation
 The scanner MUST operate as a two-stage funnel to balance scale and precision.
 - **Stage 1 (Chalutier)**: Broad technical screening (~700 tickers) using `yfinance` exclusively for price action, volume, and momentum (OHLCV). `yfinance` MUST NOT be used for any balance sheet, income statement, or ratio data.
-- **Stage 2 (Sniper)**: Deep fundamental analysis on a shortlist of exactly **SHORTLIST_SIZE = 30 tickers** using FMP official API. This value is non-negotiable: 30 × 7 FMP endpoints = 210 calls nominal against a 250 calls/day quota. Exceeding 30 tickers requires a budget audit first.
+- **Stage 2 (Sniper)**: Deep fundamental analysis on a shortlist of exactly **SHORTLIST_SIZE = 30 tickers** using FMP official API. This value is non-negotiable: 30 × 5 FMP endpoints = 150 calls nominal + 25 retry margin = **175 hard limit** against a 250 calls/day quota (BF-010: migration FMP v3→stable removed 2 endpoints from free tier). Exceeding 30 tickers requires a budget audit first.
 - **FMP Unavailability**: If FMP is unreachable (missing key or persistent 5xx after 2 retries), the system MUST send a Telegram alert `⚠️ Sniper FMP indisponible` and stop the scan. There is NO fallback to yfinance for fundamental data — a signal without FMP-verified fundamentals is worse than no signal.
 - Architecture MUST strictly separate broad discovery (yfinance) from precision analysis (FMP).
 - **ETF Pipeline**: ETFs use a **momentum-only** scoring pipeline (Perf 6M 50% + Surperf vs SPY 50%). ETFs have no P/E, ROE, or balance sheet data — framing ETF signals as "undervalued" is incorrect. The correct framing is **sector rotation momentum** (identifying sectors with accelerating price leadership). Leveraged/inverse ETFs MUST be excluded by name pattern before scoring.
@@ -59,8 +65,8 @@ To ensure tradeability and minimize slippage, the scanner MUST only consider ins
 Strategy focuses on the convergence of price momentum and fundamental acceleration:
 - **Primary signals** (price): 6-month performance (30%) and 6-month sector outperformance vs SPDR benchmark (30%).
 - **Confirmatory signal** (price): 3-month performance (15%).
-- **Fundamental acceleration — backward** (FMP): Earnings Surprise % via `earnings-surprises` (15%, with temporal decay: weight → 0 linearly over 90 days post-earnings; freed weight redistributed proportionally to the 4 remaining criteria).
-- **Fundamental acceleration — forward** (FMP): Analyst estimate revisions 3M via `analyst-estimates` (10%, no decay — revisions reflect sustained conviction).
+- **Fundamental acceleration — backward** (FMP): Earnings Surprise % via `earnings-surprises` (15% nominal weight, with temporal decay: weight → 0 linearly over 90 days post-earnings; freed weight redistributed proportionally to the 4 remaining criteria). **Degraded mode — FMP free tier**: `earnings-surprises` returns HTTP 404; criterion scores 0 for all tickers (symmetric — relative ranking preserved). Weight 15% effectively redistributed to remaining 3 price criteria at runtime.
+- **Fundamental acceleration — forward** (FMP): Analyst estimate revisions 3M via `analyst-estimates` (10% nominal weight, no decay — revisions reflect sustained conviction). **Degraded mode — FMP free tier**: `analyst-estimates` returns HTTP 402; criterion scores 0 for all tickers (symmetric — relative ranking preserved). Weight 10% effectively redistributed to remaining criteria at runtime.
 - Short-term extremes MUST be penalized: 1-month performance > +25% → -10 pts on momentum score; 1-month < -20% → -5 pts.
 
 ### VI. Sector GICS Integrity
@@ -94,16 +100,18 @@ The scoring model — not time — decides when a signal expires.
 | `VIX_WARNING_THRESHOLD` | 25 | Range [20, 30] |
 | `MAX_TICKERS_PER_SECTOR` | 3 | 10 = alpha-pure mode (risk) |
 | `MAX_WORKERS_UNIVERSE` | 4 | Hard max 6 (yfinance ban risk) |
-| `FMP_MAX_RETRIES` | 2 | Hard max 2 (budget) |
+| `FMP_MAX_RETRIES` | 2 | Hard max 2 (budget 175 hard limit) |
 | `MIN_UNIVERSE_SIZE` | 100 | Below = scan cancelled |
 | `TELEGRAM_MAX_CHARS` | 4096 | Fixed (API limit) |
+
+> **[2026-05-22 BF-010]** `FMP_CALL_BUDGET_HARD_LIMIT` = 175 (30 × 5 endpoints = 150 nominal + 25 retry margin). `earnings-surprises` et `analyst-estimates` supprimés du plan gratuit FMP — endpoints retirés du Sniper. Principe V fonctionne en mode dégradé symétrique (voir détail Principe V ci-dessus).
 
 ## Validation & Quality Gates
 
 - **Hermetic Integration Tests**: All integration tests MUST use `VCR.py` cassettes. First-run cassette recording requires explicit opt-in. Tests MUST NOT make live API calls by default.
 - **Temporal Determinism**: `Freezegun` is mandatory for all time-sensitive logic (NYSE calendar, earnings windows, data freshness, earnings surprise decay).
 - **Fail-Safe Data Parsing**: All external data MUST pass None-safe validation before entering the scoring engine. `data.get("key")` with value check, never `"key" in data` alone.
-- **FMP Budget Monitoring**: Test suite MUST include a mock call counter verifying that a full 30-ticker Sniper run stays within 250 FMP calls.
+- **FMP Budget Monitoring**: Test suite MUST include a mock call counter verifying that a full 30-ticker Sniper run stays within 175 FMP calls (30 × 5 endpoints = 150 nominal + 25 retry margin — BF-010).
 
 ## Governance
 
@@ -113,4 +121,4 @@ The ValueMomentum Scanner Constitution is the sovereign source of truth for arch
 - **Amendments**: Changes to core weights, thresholds, or the FMP budget calculation MUST be documented with financial rationale, version bump, and the amendment date added to the Constants table.
 - **Spec Alignment**: `specs/Spec_ValueMomentum_Scanner.md` is the authoritative implementation reference. Constitution principles always supersede spec details when they conflict. Spec updates that introduce contradictions with this Constitution MUST trigger a Constitution amendment.
 
-**Version**: 1.1.1 | **Ratified**: 2026-05-18 | **Last Amended**: 2026-05-21
+**Version**: 1.1.2 | **Ratified**: 2026-05-18 | **Last Amended**: 2026-05-22
