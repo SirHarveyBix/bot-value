@@ -235,6 +235,56 @@ def format_etf_signal(etf_data: dict, rank: int) -> str:
     return msg
 
 
+_GATE_EMOJI = {
+    "qualité": "📊",
+    "valorisation": "💰",
+    "fraîcheur": "📅",
+    "diversification": "🔢",
+    "sanity": "⚡",
+    "données": "❓",
+}
+
+
+async def notify_exclusions(exclusions: list[dict]) -> None:
+    """Envoie un message Telegram listant les tickers exclus avec la raison (par gate)."""
+    if not exclusions:
+        return
+    bot, chat_id = _get_bot()
+    if not bot:
+        return
+
+    msg = "🔍 <b>TICKERS ANALYSÉS ET EXCLUS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    by_gate: dict[str, list[dict]] = {}
+    for exc in exclusions:
+        by_gate.setdefault(exc["gate"], []).append(exc)
+
+    for gate, items in by_gate.items():
+        emoji = _GATE_EMOJI.get(gate, "❌")
+        msg += f"\n{emoji} <b>{gate.capitalize()}</b>\n"
+        for item in items:
+            name = escape_html(item.get("name") or item["symbol"])
+            symbol = escape_html(item["symbol"])
+            reason = escape_html(item.get("reason", "—"))
+            msg += f"  ❌ <b>{name}</b> (${symbol}) — {reason}\n"
+
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
+
+
+async def notify_yfinance_ban() -> None:
+    """Alerte Telegram si yfinance retourne trop peu de données (IP ban probable)."""
+    bot, chat_id = _get_bot()
+    if not bot:
+        logger.warning("Notifications Telegram désactivées (token manquant).")
+        return
+    msg = (
+        "🚫 <b>BAN IP yfinance détecté — scan interrompu</b>\n"
+        "<i>Le batch download yfinance a retourné moins de 60% de données valides.\n"
+        "Yahoo Finance a probablement bloqué l'IP temporairement.\n"
+        "Réessayez dans 15–30 minutes ou changez de réseau.</i>"
+    )
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
+
+
 async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits_today=None):
     """Envoi des signaux via Telegram (Asynchrone)."""
     if top_stocks.empty and top_etfs.empty and not exits_today:

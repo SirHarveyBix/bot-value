@@ -13,7 +13,7 @@ from scanner.config import CONFIG, logger
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
-from scanner.notifier import notify, notify_panic, notify_vix_unavailable
+from scanner.notifier import notify, notify_exclusions, notify_panic, notify_vix_unavailable, notify_yfinance_ban
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
 from scanner.storage import (
     DB_PATH,
@@ -104,6 +104,7 @@ async def run_scanner(force=False):
 
         if not check_batch_data_ratio(price_data, len(eligible_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du batch download.")
+            await notify_yfinance_ban()
             return
 
         # 4. Premier Screening : Momentum uniquement
@@ -125,11 +126,12 @@ async def run_scanner(force=False):
             return
 
         # 6. Scoring Engine Complet
-        ranked_stocks_df = stock_scoring_pipeline(all_data, shortlist_stocks)
+        exclusions: list[dict] = []
+        ranked_stocks_df = stock_scoring_pipeline(all_data, shortlist_stocks, exclusions_out=exclusions)
         ranked_etfs_df = etf_scoring_pipeline(all_data, initial_etfs)
 
         # 7. Post-Scoring Filters
-        top_10_stocks = filter_post_scoring(ranked_stocks_df, all_data)
+        top_10_stocks = filter_post_scoring(ranked_stocks_df, all_data, exclusions_out=exclusions)
         top_5_etfs = ranked_etfs_df.head(5)
 
         # T049: Anti survivorship bias — stocker univers Chalutier complet
@@ -167,6 +169,8 @@ async def run_scanner(force=False):
             await notify(
                 top_10_stocks, top_5_etfs, market_regime=market_regime, portfolio=portfolio, exits_today=exits_today
             )
+            if exclusions:
+                await notify_exclusions(exclusions)
 
         if not top_10_stocks.empty:
             logger.info("TOP 5 STOCKS IDENTIFIED:")

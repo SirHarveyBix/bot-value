@@ -262,8 +262,15 @@ async def fetch_fmp_data(client, symbol):
 
         analyst_revision_3m = compute_analyst_revision_3m(a_data) if a_data else None
 
+        # Priority: surprise_date (quarterly earnings announcement) → far more recent
+        # than annual IS date (e.g. "2024-12-31" = 500+ days ago, always fails freshness).
         most_recent_quarter_ts = None
-        if is_data and len(is_data) > 0:
+        if surprise_date:
+            try:
+                most_recent_quarter_ts = datetime.fromisoformat(surprise_date).timestamp()
+            except ValueError:
+                pass
+        if most_recent_quarter_ts is None and is_data and len(is_data) > 0:
             date_str = is_data[0].get("date")
             if date_str:
                 try:

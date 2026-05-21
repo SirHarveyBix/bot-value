@@ -6,7 +6,7 @@ import yfinance as yf
 from scanner.config import CONFIG, logger
 
 
-def filter_post_scoring(df, all_data):
+def filter_post_scoring(df, all_data, exclusions_out: list | None = None):
     """
     Applique les filtres de diversification sectorielle et enrichit avec l'earnings calendar.
     """
@@ -32,6 +32,8 @@ def filter_post_scoring(df, all_data):
 
                 if not is_fresh:
                     logger.warning(f"Ticker {symbol} exclu car données trop vieilles ({warning_reason})")
+                    if exclusions_out is not None:
+                        exclusions_out.append({"symbol": symbol, "name": row.get("name", symbol), "gate": "fraîcheur", "reason": warning_reason})
                     continue
 
                 # 3. Earnings Calendar check (Section 5.2)
@@ -47,6 +49,8 @@ def filter_post_scoring(df, all_data):
                 sector_counts[sector] = count + 1
             else:
                 logger.debug(f"Ticker {row['symbol']} exclu du top 10 (limite secteur {sector} atteinte)")
+                if exclusions_out is not None:
+                    exclusions_out.append({"symbol": symbol, "name": row.get("name", symbol), "gate": "diversification", "reason": f"Plafond secteur {sector} ({max_per_sector} max)"})
 
     return pd.DataFrame(final_top_10)
 

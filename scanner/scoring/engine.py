@@ -123,7 +123,7 @@ def compute_valuation_score(row):
     return max(0, v_score), True
 
 
-def stock_scoring_pipeline(all_data, symbols):
+def stock_scoring_pipeline(all_data, symbols, exclusions_out: list | None = None):
     """Pipeline de scoring pour les actions."""
     rows = []
     for symbol in symbols:
@@ -136,11 +136,15 @@ def stock_scoring_pipeline(all_data, symbols):
 
         # Sanity Check Gate (baisse < -45% ou hausse > +50% journalière)
         if not sanity_check_gate(prices, symbol):
+            if exclusions_out is not None:
+                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "sanity", "reason": "Variation journalière anormale (split / glitch)"})
             continue
 
         # T022: Exclusion sector=None (Lacune 7)
         if info.get("sector") is None:
             logger.warning(f"Exclusion {symbol}: sector=None (sector_missing)")
+            if exclusions_out is not None:
+                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "données", "reason": "Secteur inconnu"})
             continue
 
         q_metrics = calculate_quality_metrics(info)
@@ -156,11 +160,15 @@ def stock_scoring_pipeline(all_data, symbols):
         v_excluded, v_ok, v_reason = apply_valuation_gates(v_metrics)
 
         if not q_ok:
-            logger.debug(f"Exclusion {symbol} (Qualité): {q_reason}")
+            logger.info(f"Exclusion {symbol} (Qualité): {q_reason}")
+            if exclusions_out is not None:
+                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "qualité", "reason": q_reason})
             continue
 
         if v_excluded:
-            logger.debug(f"Exclusion {symbol} (Valorisation): {v_reason}")
+            logger.info(f"Exclusion {symbol} (Valorisation): {v_reason}")
+            if exclusions_out is not None:
+                exclusions_out.append({"symbol": symbol, "name": info.get("longName", symbol), "gate": "valorisation", "reason": v_reason})
             continue
 
         row = {

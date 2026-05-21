@@ -303,6 +303,10 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 - BF-003 — `storage.py` : `signals_latest.json` jamais créé → `export_signals_json()` ajouté
 - BF-004 — `test_integration_vcr.py` : test contaminait `signals_latest.json` réel → `JSON_PATH` patché en `tmp_path`
 - BF-005 — `fetcher.py` : ROE exclu si FMP free tier retourne < 3 ans → condition `>= 1` an
+- BF-006 — `fetcher.py` : `mostRecentQuarter` = date IS annuelle (ex. "2024-12-31" = 507j) → freshness exclut tout. Fix : priorité à `surprise_date` (annonce trimestrielle, ~90-150j)
+- BF-007 — `engine.py` + `filters.py` : exclusions qualité/fraîcheur silencieuses (debug level) → changées en INFO + collectées dans `exclusions_out: list | None`
+- BF-008 — `notifier.py` : ajout `notify_exclusions()` (tickers exclus avec raison par gate) + `notify_yfinance_ban()` (ban IP détecté lors du batch download)
+- BF-009 — `main.py` : `notify_yfinance_ban()` câblé sur `check_batch_data_ratio` failure ; `notify_exclusions()` envoyé après les signaux normaux
 
 - **Tâches [P]** (parallélisables) : 42
 - **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches — ✅ complet
