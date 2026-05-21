@@ -526,6 +526,10 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 > **Pourquoi VIX > 35 et non > 25** : En 2022, le VIX est resté au-dessus de 25 pendant plus de 8 mois consécutifs. Le seuil de 35 correspond à une panique réelle (COVID 2020, Lehman 2008), pas à une nervosité de marché. Entre 25 et 35, les signaux sont émis avec avertissement — l'utilisateur décide.
 >
 > **Scan annulé en mode Panique** : la table `scans` en SQLite reçoit quand même une entrée avec `regime='panic'`. La table `signals` ne reçoit aucune entrée. Le Telegram envoie uniquement le message d'alerte de panique (voir section 6.3).
+>
+> **Fallback VIX NaN/0 (robustesse ouverture de marché)** : Yahoo Finance présente régulièrement des retards de rafraîchissement sur `^VIX` dans les premières minutes de cotation — la valeur retournée peut être `NaN` ou `0`. Si la dernière valeur de `vix_close` est `NaN` ou `0`, le système utilise la dernière valeur non-NaN de la série (`vix_close.replace(0, float("nan")).dropna().iloc[-1]`), typiquement la clôture J-1. Si aucune valeur valide n'est disponible dans l'historique, le scan est annulé et une alerte Telegram `⚠️ VIX indisponible — scan annulé` est envoyée. **Comportement silencieusement dangereux sans ce fallback** : `NaN > 35` = False, `NaN > 25` = False → le bot évaluerait un régime NORMAL ou BEAR_LIGHT en pleine panique.
+>
+> **Période historique minimale SPY pour EMA 200 fiable** : L'EMA 200 est calculée via formule récursive — les 200 premières valeurs portent un biais d'initialisation significatif (la première valeur d'ancrage pollue le résultat pendant ~100 jours supplémentaires). L'historique SPY téléchargé DOIT couvrir **au minimum 500 jours de trading** (≈ 2 ans calendaires). `period="2y"` dans `fetch_market_indices()` ≈ 504 jours de trading — valeur de référence à ne pas réduire. Un `period="1y"` (≈ 252 jours) produirait une EMA 200 biaisée vers la valeur initiale.
 
 ### 4.1 Pipeline Actions : définition des critères
 
@@ -666,6 +670,8 @@ def winsorize(value: float, low: float, high: float) -> float:
 > ```
 >
 > **Pourquoi** : Sans cette décroissance, une entreprise ayant battu les attentes en octobre continue d'être récompensée en janvier pour un signal dont le marché a déjà fait le prix. La Révision estimations n'a pas de décroissance — les révisions d'analystes reflètent une conviction continue, pas un événement ponctuel.
+>
+> **Fallback si `analyst-estimates` inaccessible (FMP free tier)** : Le plan gratuit FMP peut restreindre l'endpoint `analyst-estimates` (HTTP 403). Si cet endpoint retourne une erreur ou une liste vide, `analyst_revision_3m = None` pour tous les tickers. Dans ce cas, `rank_analyst_revision` = NaN → score contribue `0 × w_revision` via `(row.get("rank_analyst_revision") or 0)`. L'impact est **symétrique** (tous les tickers perdent ce critère également) : le classement relatif est préservé, seul le score absolu est réduit de 10% uniformément. Aucune action corrective n'est nécessaire — ce comportement est acceptable pour le ranking percentile. Log `WARNING: analyst-estimates indisponible — critère revision exclu de ce run` à émettre.
 
 **Benchmarks sectoriels SPDR utilisés pour la surperformance :**
 
@@ -1529,6 +1535,7 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 - [ ] `tenacity` pour exponential backoff FMP — remplace retry manuel, aligné sur `FMP_MAX_RETRIES=2` (§13.1)
 - [ ] Telegram 429 → header `Retry-After` — remplace délai fixe 1.5s (§6.6)
 - [ ] Troncature HTML-safe — fermeture des balises ouvertes avant cut à 4096 chars (§6.6)
+- [ ] **Fallback VIX NaN/0** — `vix_close.replace(0, NaN).dropna().iloc[-1]` ; série entièrement NaN → scan annulé + Telegram `⚠️ VIX indisponible`. Prévient fausse évaluation NORMAL/BEAR_LIGHT en cas de données manquantes à l'ouverture (§4.0 — T081/T082)
 
 **Améliorations scoring :**
 

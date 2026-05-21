@@ -267,25 +267,41 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 
 **Checkpoint** : Jour d'un split simulé (-75%) → ticker exclu. Chute légitime (-30%) → ticker maintenu.
 
+### 9.5 Robustesse Market Gate (v1.1 bugfixes)
+
+- [ ] T081 [US2] Implémenter fallback VIX NaN/0 dans `main.py` (§4.0 spec) : après `fetch_market_indices()`, remplacer `vix_close.iloc[-1].item()` par `vix_close.replace(0, float("nan")).dropna().iloc[-1].item()` — utilise la dernière valeur valide (clôture J-1 si ouverture non disponible). Si `dropna()` retourne une série vide → log `ERROR: VIX indisponible`, envoyer alerte Telegram `⚠️ VIX indisponible — scan annulé`, return sans scan. Appliquer le même pattern à `spy_close` par cohérence.
+- [ ] T082 [P] [US2] Test `tests/test_logic.py` : VIX série avec dernière valeur NaN → fallback sur avant-dernière valeur non-NaN ; VIX = 0 → traité comme NaN → fallback ; VIX série entièrement NaN → scan annulé (pas d'exception non catchée)
+
+**Checkpoint** : `vix_close = [25.0, 28.0, NaN]` → `current_vix = 28.0`. `vix_close = [NaN, NaN]` → scan annulé + Telegram. `vix_close = [30.0, 0.0]` → `current_vix = 30.0`.
+
 ---
 
 ## Résumé
 
-| Phase             | User Story | Tâches        | Statut |
-| ----------------- | ---------- | ------------- | ------ |
-| 1 Setup           | —          | T001–T007     | ⬜     |
-| 2 Foundationnel   | —          | T008–T014     | ⬜     |
-| 3 Market Gate     | US2 (P1)   | T015–T023     | ⬜     |
-| 4 MVP Scan        | US1 (P1)   | T024–T040     | ⬜     |
-| 5 Entonnoir       | US3 (P2)   | T041–T046     | ⬜     |
-| 6 Persistance     | US4 (P2)   | T047–T052     | ⬜     |
-| 7 ETFs            | US5 (P3)   | T053–T057     | ⬜     |
-| 8 Polish          | —          | T058–T067     | ⬜     |
-| 9 v1.1 Robustesse | —          | T068–T073     | ⬜     |
-| 9 v1.1 Scoring    | US1        | T074–T076     | ⬜     |
-| 9 v1.1 Tests      | —          | T077–T079     | ⬜     |
-| **Total**         |            | **79 tâches** |        |
+| Phase              | User Story | Tâches     | Avancement | Statut |
+| ------------------ | ---------- | ---------- | ---------- | ------ |
+| 1 Setup            | —          | T001–T007  |  6/7  85%  | 🔄     |
+| 2 Foundationnel    | —          | T008–T014  |  7/7 100%  | ✅     |
+| 3 Market Gate      | US2 (P1)   | T015–T023  |  9/9 100%  | ✅     |
+| 4 MVP Scan         | US1 (P1)   | T024–T040  | 17/17 100% | ✅     |
+| 5 Entonnoir        | US3 (P2)   | T041–T046  |  6/6 100%  | ✅     |
+| 6 Persistance      | US4 (P2)   | T047–T052  |  6/6 100%  | ✅     |
+| 7 ETFs             | US5 (P3)   | T053–T057  |  1/5  20%  | 🔄     |
+| 8 Polish           | —          | T058–T067  | 5/10  50%  | 🔄     |
+| 9.1 v1.1 Rob.      | —          | T068–T073  |  6/6 100%  | ✅     |
+| 9.2 v1.1 Scoring   | US1        | T074–T076  |  3/3 100%  | ✅     |
+| 9.3 v1.1 Tests     | —          | T077–T079  |  3/3 100%  | ✅     |
+| 9.4 v1.1 Bugfixes  | US1/US2    | T080–T082  |  0/3   0%  | ⬜     |
+| **Total**          |            | **82 tâches** | **69/82 84%** |    |
 
-- **Tâches [P]** (parallélisables) : 41
-- **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches
-- **v1.1 scope** : T068–T079 (Phase 9) = 12 tâches (dépend de T001–T040 terminés)
+> Légende : ✅ terminé · 🔄 en cours · ⬜ non démarré
+
+**Tâches restantes (13) :**
+- T004 — packages Python vides `scanner/__init__.py`
+- T053–T055, T057 — pipeline ETFs (scoring + notifier + tests)
+- T062, T064–T067 — Polish (tests hermétiques, README déploiement, launchd, pytest 100%)
+- T080–T082 — v1.1 Bugfixes (sanity gate, VIX NaN fallback + tests)
+
+- **Tâches [P]** (parallélisables) : 42
+- **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches — ✅ complet
+- **v1.1 scope** : T068–T082 (Phase 9) = 15 tâches — 12/15 terminés
