@@ -517,7 +517,7 @@ Les conditions sont évaluées **dans l'ordre de priorité suivant** (first matc
 | Priorité | Condition                                         | Régime         | Comportement                                                                        |
 | -------- | ------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
 | 1        | VIX > 35 (quelle que soit la position SPY/EMA200) | **Panique**    | Scan annulé + alerte Telegram `🚨 RÉGIME DE PANIQUE : EXPOSITION DÉCONSEILLÉE`      |
-| 2        | SPY < EMA200 **ET** VIX entre 25 et 35            | **Prudence**   | Scan complet + flag `⚠️ RÉGIME DE PRUDENCE : VOLATILITÉ ÉLEVÉE` sur chaque signal   |
+| 2        | VIX ∈ (25, 35] (quelle que soit la position SPY)  | **Prudence**   | Scan complet + flag `⚠️ RÉGIME DE PRUDENCE : VOLATILITÉ ÉLEVÉE` sur chaque signal   |
 | 3        | SPY < EMA200 **ET** VIX ≤ 25                      | **Bear Light** | Scan normal + log warning interne uniquement (pas de flag sur les signaux Telegram) |
 | 4        | SPY ≥ EMA200 **ET** VIX ≤ 25                      | **Normal**     | Scan complet, Top 10 émis normalement                                               |
 
@@ -632,10 +632,12 @@ def winsorize(value: float, low: float, high: float) -> float:
 > **_(v1.1)_ Momentum ajusté par la volatilité (Daniel & Moskowitz, 2016)** : Un momentum "brut" expose au _Momentum Crash_ — des actifs en hausse parabolique (momentum élevé + volatilité élevée) s'effondrent brutalement lors des retournements. Diviser la performance brute par l'écart-type quotidien récompense les tendances régulières et pénalise les hausses spéculatives.
 >
 > ```python
+> VOLATILITY_FLOOR = 0.0005  # Plancher 0.05% σ journalier — évite division par quasi-zéro
 > returns_daily = price_series.pct_change().dropna()
-> return_6m = (price_series.iloc[-1] / price_series.iloc[-127]) - 1  # 126 jours de bourse
+> return_6m = (price_series.iloc[-1] / price_series.iloc[-126]) - 1  # 126 jours de bourse
 > stddev_6m = returns_daily.tail(126).std()
-> momentum_adj = return_6m / stddev_6m if stddev_6m > 0 else 0.0
+> effective_vol = max(stddev_6m, VOLATILITY_FLOOR)
+> momentum_adj = return_6m / effective_vol
 > ```
 >
 > En v1.0, utiliser `return_6m` brut. En v1.1, remplacer par `momentum_adj`. Les données sont disponibles via yfinance OHLCV — 0 appel FMP supplémentaire.
@@ -782,6 +784,20 @@ data_freshness_check():
     Si dernières données > 180 jours :
         Exclure du ranking final
 ```
+
+### 5.1b Sanity Check Gate (intégrité des prix)
+
+Si la variation quotidienne d'un ticker dépasse **-45%**, le ticker est exclu du scoring du jour :
+
+```python
+sanity_check_gate():
+    Pour chaque ticker dans la shortlist :
+        daily_return = (close_today - close_yesterday) / close_yesterday
+        Si daily_return < -0.45 :
+            Exclure + logger.warning("SANITY_GATE exclu {ticker}: chute {daily_return:.1%} — suspicion stock split non synchronisé ou glitch de données")
+```
+
+> **Pourquoi** : Le jour d'un stock split non encore synchronisé par Yahoo Finance (ex. Nvidia 10-pour-1), le cours ajusté peut afficher une chute de -90%. Sans cette garde, le bot inclurait de faux "crashs" dans son scoring momentum, polluant le Top 10. Le seuil de -45% est choisi pour exclure les splits 2-pour-1 (chute apparente de -50%) et laisser passer les corrections légitimes (-20% à -40%).
 
 ### 5.2 Earnings Calendar Check
 
@@ -1113,6 +1129,10 @@ async def update_signal_returns():
     )
     for signal in signals_to_update:
         current_price = await fetch_current_price(signal.ticker)  # yfinance seul
+        if current_price is None:
+            # Sentinel -1.0 : ticker délisté/introuvable — ne plus retenter
+            db.update(signal.id, price_30d_later=-1.0)
+            continue
         return_30d = (current_price - signal.price_at_signal) / signal.price_at_signal
         db.update(signal.id, price_30d_later=current_price, return_30d=return_30d)
 ```

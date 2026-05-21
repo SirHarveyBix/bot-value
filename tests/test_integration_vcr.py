@@ -1,12 +1,16 @@
-import sys
-import pytest
 import os
+import sys
+
+import httpx
 import pandas as pd
+import pytest
 from freezegun import freeze_time
-from scanner.fetcher import fetch_all_data, fetch_market_indices, FMPUnavailableError
+
+from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices
 from scanner.scoring.engine import stock_scoring_pipeline
 from scanner.storage import save_signals
 from scanner.universe import load_universe
+
 
 @pytest.mark.asyncio
 async def test_full_pipeline_vcr(tmp_path):
@@ -16,11 +20,13 @@ async def test_full_pipeline_vcr(tmp_path):
     min_universe_size patché à 1 car seulement 5 stocks mock.
     """
     from unittest.mock import patch
-    from scanner.config import CONFIG
-    import scanner.scoring.engine as engine_module
-    from scanner import fetcher as fetcher_module
-    import scanner.storage as storage_module
+
     import numpy as np
+
+    import scanner.scoring.engine as engine_module
+    import scanner.storage as storage_module
+    from scanner import fetcher as fetcher_module
+    from scanner.config import CONFIG
 
     patched_cfg = {
         **CONFIG,
@@ -29,12 +35,25 @@ async def test_full_pipeline_vcr(tmp_path):
     }
 
     mock_info = {
-        "longName": "Mock Corp", "sector": "Technology",
-        "marketCap": 5_000_000_000, "returnOnEquity": 0.20, "roe_ttm": 0.20, "roe_3y": 0.20,
-        "operatingMargins": 0.15, "totalDebt": 1e9, "totalCash": None, "netDebt": 5e8,
-        "ebitda": 5e8, "freeCashflow": 3e8, "forwardPE": 20.0, "enterpriseToEbitda": 15.0,
-        "pegRatio": 1.5, "surprise_pct": 0.05, "surprise_date": "2024-10-15",
-        "analyst_revision_3m": 0.02, "mostRecentQuarter": 1728000000.0, "source": "FMP",
+        "longName": "Mock Corp",
+        "sector": "Technology",
+        "marketCap": 5_000_000_000,
+        "roe_ttm": 0.20,
+        "roe_3y": 0.20,
+        "operatingMargins": 0.15,
+        "totalDebt": 1e9,
+        "totalCash": None,
+        "netDebt": 5e8,
+        "ebitda": 5e8,
+        "freeCashflow": 3e8,
+        "forwardPE": 20.0,
+        "enterpriseToEbitda": 15.0,
+        "pegRatio": 1.5,
+        "surprise_pct": 0.05,
+        "surprise_date": "2024-10-15",
+        "analyst_revision_3m": 0.02,
+        "mostRecentQuarter": 1728000000.0,
+        "source": "FMP",
     }
 
     dates = pd.date_range("2024-01-01", periods=252, freq="B")
@@ -46,16 +65,18 @@ async def test_full_pipeline_vcr(tmp_path):
 
     spy_prices = pd.Series([490.0] * 252, index=dates)
     vix_prices = pd.Series([15.0] * 252, index=dates)
-    mock_indices = pd.DataFrame({
-        ("Close", "SPY"): spy_prices,
-        ("Close", "^VIX"): vix_prices,
-    })
+    mock_indices = pd.DataFrame(
+        {
+            ("Close", "SPY"): spy_prices,
+            ("Close", "^VIX"): vix_prices,
+        }
+    )
     mock_indices.columns = pd.MultiIndex.from_tuples(mock_indices.columns)
 
     data_dict = {}
     for s in stocks + ["SPY"]:
         for col in ["Close", "Open", "High", "Low", "Volume"]:
-            data_dict[(s, col)] = (np.linspace(100, 130, 252) if col != "Volume" else np.full(252, 1e6))
+            data_dict[(s, col)] = np.linspace(100, 130, 252) if col != "Volume" else np.full(252, 1e6)
     mock_batch = pd.DataFrame(data_dict, index=dates)
     mock_batch.columns = pd.MultiIndex.from_tuples(mock_batch.columns)
 
@@ -78,15 +99,18 @@ async def test_full_pipeline_vcr(tmp_path):
 
                         # 4. Storage (WAL mode) — DB dans tmp_path pour CI
                         db_file = str(tmp_path / "scanner_history.db")
-                        market_data = {
-                            "regime": "normal",
-                            "spy_price": 500.0,
-                            "spy_ema200": 480.0,
-                            "vix": 15.0
-                        }
+                        market_data = {"regime": "normal", "spy_price": 500.0, "spy_ema200": 480.0, "vix": 15.0}
                         with patch.object(storage_module, "DB_PATH", db_file):
-                            save_signals(ranked_df.head(3), pd.DataFrame(), all_data, len(stocks), market_data=market_data)
+                            save_signals(
+                                ranked_df.head(3), pd.DataFrame(), all_data, len(stocks), market_data=market_data
+                            )
                             assert os.path.exists(db_file)
+
+                        # T039 — score_global ∈ [0,100], jamais NaN
+                        assert "score_global" in ranked_df.columns
+                        assert not ranked_df["score_global"].isna().any(), "score_global contient des NaN"
+                        assert (ranked_df["score_global"] >= 0).all(), "score_global < 0 détecté"
+                        assert (ranked_df["score_global"] <= 100).all(), "score_global > 100 détecté"
 
 
 # T042 — Budget FMP ≤ 250 calls pour 30 tickers
@@ -97,17 +121,32 @@ async def test_fmp_budget_counter():
     7 endpoints × 30 tickers = 210 nominaux.
     """
     from unittest.mock import patch
+
     from scanner import fetcher as fetcher_module
 
     call_count = 0
 
     mock_info = {
-        "symbol": "TEST", "longName": "Test Corp", "sector": "Technology",
-        "marketCap": 5_000_000_000, "returnOnEquity": 0.2, "roe_ttm": 0.2, "roe_3y": 0.2,
-        "operatingMargins": 0.15, "totalDebt": 1e9, "totalCash": None, "netDebt": 5e8,
-        "ebitda": 5e8, "freeCashflow": 3e8, "forwardPE": 20.0, "enterpriseToEbitda": 15.0,
-        "pegRatio": 1.5, "surprise_pct": 0.0, "surprise_date": None,
-        "analyst_revision_3m": None, "source": "FMP",
+        "symbol": "TEST",
+        "longName": "Test Corp",
+        "sector": "Technology",
+        "marketCap": 5_000_000_000,
+        "returnOnEquity": 0.2,
+        "roe_ttm": 0.2,
+        "roe_3y": 0.2,
+        "operatingMargins": 0.15,
+        "totalDebt": 1e9,
+        "totalCash": None,
+        "netDebt": 5e8,
+        "ebitda": 5e8,
+        "freeCashflow": 3e8,
+        "forwardPE": 20.0,
+        "enterpriseToEbitda": 15.0,
+        "pegRatio": 1.5,
+        "surprise_pct": 0.0,
+        "surprise_date": None,
+        "analyst_revision_3m": None,
+        "source": "FMP",
     }
 
     async def mock_fetch_ticker(symbol, client=None):
@@ -126,7 +165,7 @@ async def test_fmp_budget_counter():
             except Exception:
                 pass
 
-    assert call_count <= 250, f"Budget FMP dépassé: {call_count} calls > 250"
+    assert call_count <= 245, f"Budget FMP dépassé: {call_count} calls > 245 (SC-001)"
 
 
 # T043 — Pipeline panic : VIX=40 → 0 signaux, notify_panic appelé
@@ -136,7 +175,8 @@ async def test_full_pipeline_panic_regime():
     """
     VIX=40 → scan termine après notify_panic(), 0 rows dans signals.
     """
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
+
     import main as main_module
 
     panic_called = False
@@ -150,18 +190,21 @@ async def test_full_pipeline_panic_regime():
 
     spy_prices = pd.Series([450.0] * 400)
     vix_prices = pd.Series([40.0] * 400)
-    mock_df = pd.DataFrame({
-        ("Close", "SPY"): spy_prices,
-        ("Close", "^VIX"): vix_prices,
-    })
+    mock_df = pd.DataFrame(
+        {
+            ("Close", "SPY"): spy_prices,
+            ("Close", "^VIX"): vix_prices,
+        }
+    )
     mock_df.columns = pd.MultiIndex.from_tuples(mock_df.columns)
 
     with patch.object(main_module, "notify_panic", side_effect=mock_notify_panic):
         with patch.object(main_module, "save_scan_entry", side_effect=mock_save_scan_entry):
             with patch.object(main_module, "is_market_open", return_value=True):
                 with patch.object(main_module, "fetch_market_indices", return_value=mock_df):
-                    with patch.object(main_module, "fetch_prices_batch", new_callable=AsyncMock,
-                                      return_value=pd.DataFrame()):
+                    with patch.object(
+                        main_module, "fetch_prices_batch", new_callable=AsyncMock, return_value=pd.DataFrame()
+                    ):
                         await main_module.run_scanner(force=True)
 
     assert panic_called, "notify_panic() doit être appelé pour VIX=40"
@@ -175,6 +218,7 @@ async def test_fmp_unavailable_abort():
     → notify_fmp_unavailable() appelé, scan avorté, 0 signaux.
     """
     from unittest.mock import patch
+
     from scanner import fetcher as fetcher_module
 
     fmp_unavailable_called = False
@@ -190,20 +234,22 @@ async def test_fmp_unavailable_abort():
 
     with patch.object(fetcher_module, "fetch_fmp_data", side_effect=mock_fmp_data):
         with patch.object(fetcher_module, "fetch_prices_batch", return_value=mock_prices):
-            with patch.object(fetcher_module, "notify_fmp_unavailable",
-                              side_effect=mock_notify_fmp):
-                with pytest.raises(FMPUnavailableError):
-                    await fetch_all_data(["AAPL"], [], prices_batch=mock_prices)
+            with patch.object(fetcher_module, "notify_fmp_unavailable", side_effect=mock_notify_fmp):
+                with patch.object(fetcher_module.cache, "get", return_value=None):
+                    with pytest.raises(FMPUnavailableError):
+                        await fetch_all_data(["AAPL"], [], prices_batch=mock_prices)
 
     assert fmp_unavailable_called, "notify_fmp_unavailable() doit être appelé lors d'une FMPUnavailableError"
 
 
 # ── update_signal_returns ─────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_update_signal_returns_no_rows(tmp_path):
     """0 signaux éligibles → 0 mises à jour, pas d'erreur."""
     from unittest.mock import patch
+
     import scanner.storage as storage_module
     from scanner.storage import init_db, update_signal_returns
 
@@ -217,8 +263,8 @@ async def test_update_signal_returns_no_rows(tmp_path):
 async def test_update_signal_returns_negative(tmp_path):
     """Signal avec price_at_signal=100, prix actuel=80 → return_30d=-0.2."""
     import sqlite3
-    import yfinance as yf
-    from unittest.mock import patch, AsyncMock, MagicMock
+    from unittest.mock import patch
+
     import scanner.storage as storage_module
     from scanner.storage import init_db, update_signal_returns
 
@@ -229,23 +275,25 @@ async def test_update_signal_returns_negative(tmp_path):
         conn = sqlite3.connect(db_file)
         conn.execute(
             "INSERT INTO scans (scan_date, market_regime, universe_size, eligible_count) VALUES (?,?,?,?)",
-            ("2026-01-01", "normal", 100, 5)
+            ("2026-01-01", "normal", 100, 5),
         )
         scan_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
             "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, score_quality, "
             "score_valuation, score_momentum, first_seen_date, price_at_signal) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (scan_id, "TEST", "Test Corp", "stock", 1, 80.0, 70.0, 60.0, 90.0, "2026-01-01", 100.0)
+            (scan_id, "TEST", "Test Corp", "stock", 1, 80.0, 70.0, 60.0, 90.0, "2026-01-01", 100.0),
         )
         conn.commit()
         conn.close()
 
-        mock_hist = pd.DataFrame({"Close": [80.0]})
-        mock_ticker = MagicMock(spec=yf.Ticker)
-        mock_ticker.history = MagicMock(return_value=mock_hist)
+        # L'implémentation utilise yf.download (batch) avec MultiIndex columns
+        mock_df = pd.DataFrame(
+            data=[[80.0]],
+            columns=pd.MultiIndex.from_tuples([("TEST", "Close")]),
+        )
 
-        with patch("yfinance.Ticker", return_value=mock_ticker):
+        with patch("yfinance.download", return_value=mock_df):
             await update_signal_returns()
 
         conn = sqlite3.connect(db_file)
@@ -258,11 +306,12 @@ async def test_update_signal_returns_negative(tmp_path):
 
 # ── fetch_fmp_data ────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_missing_key():
     """Clé FMP absente → FMPUnavailableError immédiat."""
-    from unittest.mock import patch, AsyncMock
-    import httpx
+    from unittest.mock import AsyncMock, patch
+
     from scanner.fetcher import fetch_fmp_data
 
     cfg = {
@@ -278,8 +327,8 @@ async def test_fetch_fmp_data_missing_key():
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_success():
     """Réponses 200 complètes → dict correct (totalCash=None, sector, surprise_pct)."""
-    from unittest.mock import patch, MagicMock
-    import httpx
+    from unittest.mock import MagicMock, patch
+
     from scanner.fetcher import fetch_fmp_data
 
     def make_resp(data):
@@ -289,13 +338,27 @@ async def test_fetch_fmp_data_success():
         return r
 
     url_responses = {
-        "ratios-ttm": make_resp([{
-            "returnOnEquityTTM": 0.20, "operatingProfitMarginTTM": 0.15,
-            "priceEarningsRatioTTM": 20.0, "enterpriseValueOverEBITDATTM": 15.0, "pegRatioTTM": 1.5,
-        }]),
-        "key-metrics-ttm": make_resp([{
-            "totalDebtTTM": 1e9, "netDebtTTM": 5e8, "ebitdaTTM": 5e8, "freeCashFlowTTM": 3e8,
-        }]),
+        "ratios-ttm": make_resp(
+            [
+                {
+                    "returnOnEquityTTM": 0.20,
+                    "operatingProfitMarginTTM": 0.15,
+                    "priceEarningsRatioTTM": 20.0,
+                    "enterpriseValueOverEBITDATTM": 15.0,
+                    "pegRatioTTM": 1.5,
+                }
+            ]
+        ),
+        "key-metrics-ttm": make_resp(
+            [
+                {
+                    "totalDebtTTM": 1e9,
+                    "netDebtTTM": 5e8,
+                    "ebitdaTTM": 5e8,
+                    "freeCashFlowTTM": 3e8,
+                }
+            ]
+        ),
         "profile": make_resp([{"companyName": "Apple", "sector": "Technology", "mktCap": 3e12}]),
         "income-statement": make_resp([{"date": "2024-09-30", "netIncome": 1e9}]),
         "balance-sheet-statement": make_resp([{"totalStockholdersEquity": 5e9}]),
@@ -303,7 +366,7 @@ async def test_fetch_fmp_data_success():
         "analyst-estimates": make_resp([{"estimatedEpsAvg": 2.1}, {"estimatedEpsAvg": 2.0}]),
     }
 
-    async def mock_get(url):
+    async def mock_get(url, **kwargs):
         for key, resp in url_responses.items():
             if key in url:
                 return resp
@@ -329,17 +392,18 @@ async def test_fetch_fmp_data_success():
 @pytest.mark.asyncio
 async def test_fetch_fmp_data_5xx_raises():
     """5xx persistant → FMPUnavailableError après max_retries tentatives."""
-    from unittest.mock import patch, MagicMock
-    import httpx
+    from unittest.mock import MagicMock, patch
+
     from scanner.fetcher import fetch_fmp_data
 
     def make_resp_5xx():
         r = MagicMock()
         r.status_code = 503
         r.json.return_value = {}
+        r.raise_for_status.side_effect = httpx.HTTPStatusError("503", request=MagicMock(), response=r)
         return r
 
-    async def mock_get(url):
+    async def mock_get(url, **kwargs):
         return make_resp_5xx()
 
     mock_client = MagicMock(spec=httpx.AsyncClient)
@@ -350,6 +414,81 @@ async def test_fetch_fmp_data_5xx_raises():
         "scoring": {},
     }
     with patch("scanner.fetcher.CONFIG", cfg):
-        with patch("asyncio.sleep"):  # accélérer le retry
+        with patch("asyncio.sleep"):
             with pytest.raises(FMPUnavailableError):
                 await fetch_fmp_data(mock_client, "AAPL")
+
+
+# T052 — 2 scans consécutifs J et J+31 : first_seen_date préservée, scanned_universe peuplée
+@pytest.mark.asyncio
+async def test_first_seen_date_preserved_across_scans(tmp_path):
+    """
+    Scan J : AAPL apparu → first_seen_date = J.
+    Scan J+31 : AAPL réapparaît → first_seen_date conservée = J (non réinitialisée).
+    scanned_universe peuplée à chaque scan.
+    """
+    import sqlite3
+    from unittest.mock import patch
+
+    from freezegun import freeze_time
+
+    import scanner.storage as storage_module
+    from scanner.storage import get_first_seen_date, init_db, save_scanned_universe, save_signals_to_db
+
+    db_file = str(tmp_path / "test_t052.db")
+    scan_date_j = "2026-01-01"
+    scan_date_j31 = "2026-02-01"
+
+    stock_row = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "name": "Apple Inc.",
+                "score_global": 85.0,
+                "score_quality": 80.0,
+                "score_valuation": 75.0,
+                "score_momentum": 90.0,
+                "pe": 28.5,
+                "roe": 0.20,
+                "margin": 0.15,
+                "perf_6m": 0.12,
+                "outperf_6m": 0.05,
+            }
+        ]
+    )
+    market_data = {"regime": "normal", "spy_price": 500.0, "spy_ema200": 480.0, "vix": 15.0}
+
+    with patch.object(storage_module, "DB_PATH", db_file):
+        init_db()
+
+        # Scan J
+        with freeze_time(scan_date_j):
+            save_signals_to_db(stock_row, pd.DataFrame(), {}, 100, market_data=market_data)
+
+        conn = sqlite3.connect(db_file)
+        first_date = get_first_seen_date(conn, "AAPL")
+        conn.close()
+        assert first_date == scan_date_j, f"first_seen_date doit être {scan_date_j}"
+
+        # Scan J+31 : AAPL réapparaît
+        with freeze_time(scan_date_j31):
+            save_signals_to_db(stock_row, pd.DataFrame(), {}, 100, market_data=market_data)
+
+        conn = sqlite3.connect(db_file)
+        second_date = get_first_seen_date(conn, "AAPL")
+        conn.close()
+        assert second_date == scan_date_j, "first_seen_date ne doit PAS être réinitialisée lors d'une réapparition"
+
+        # scanned_universe peuplée
+        eligible_df = pd.DataFrame([{"symbol": "AAPL", "m_score": 75.0}])
+        await save_scanned_universe(eligible_df, ["AAPL"], ["AAPL"], scan_date=scan_date_j)
+
+        conn = sqlite3.connect(db_file)
+        row = conn.execute(
+            "SELECT ticker, in_shortlist, in_top10 FROM scanned_universe WHERE scan_date=?", (scan_date_j,)
+        ).fetchone()
+        conn.close()
+        assert row is not None, "scanned_universe doit contenir AAPL"
+        assert row[0] == "AAPL"
+        assert row[1] == 1  # in_shortlist
+        assert row[2] == 1  # in_top10

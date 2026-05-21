@@ -10,15 +10,14 @@ from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, c
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
 
-
 RATIO_CLAMP: dict[str, tuple[float, float]] = {
-    "roe":              (0.0,   1.50),
-    "margin":           (-0.50, 0.60),
-    "fcf_yield":        (-0.20, 0.30),
-    "debt_ebitda":      (0.0,   10.0),
-    "pe":               (1.0,   60.0),
-    "ev_ebitda":        (0.0,   40.0),
-    "peg":              (-5.0,  5.0),
+    "roe": (0.0, 1.50),
+    "margin": (-0.50, 0.60),
+    "fcf_yield": (-0.20, 0.30),
+    "debt_ebitda": (0.0, 10.0),
+    "pe": (1.0, 60.0),
+    "ev_ebitda": (0.0, 40.0),
+    "peg": (-5.0, 5.0),
 }
 
 
@@ -31,7 +30,8 @@ def _apply_winsorization(df: pd.DataFrame) -> pd.DataFrame:
     """Applique RATIO_CLAMP sur toutes les colonnes de ratio présentes dans df."""
     for col, (lo, hi) in RATIO_CLAMP.items():
         if col in df.columns:
-            df[col] = df[col].apply(lambda v: winsorize(v, lo, hi) if pd.notna(v) else v)
+            _lo, _hi = lo, hi
+            df[col] = df[col].apply(lambda v, lo=_lo, hi=_hi: winsorize(v, lo, hi) if pd.notna(v) else v)
     return df
 
 
@@ -87,11 +87,7 @@ def momentum_screening_pipeline(price_data, symbols):
 
         m_metrics = calculate_momentum_metrics(prices, {}, None)
 
-        rows.append({
-            "symbol": symbol,
-            "perf_6m": m_metrics.get("perf_6m", 0),
-            "perf_3m": m_metrics.get("perf_3m", 0)
-        })
+        rows.append({"symbol": symbol, "perf_6m": m_metrics.get("perf_6m", 0), "perf_3m": m_metrics.get("perf_3m", 0)})
 
     if not rows:
         return pd.DataFrame()
@@ -114,9 +110,9 @@ def compute_valuation_score(row):
         v_score = (row["rank_pe"] or 0) * 0.56 + (row["rank_ev_ebitda"] or 0) * 0.44
     else:
         v_score = (
-            (row["rank_pe"] or 0) * vw["pe_forward"] +
-            (row["rank_ev_ebitda"] or 0) * vw["ev_ebitda"] +
-            (row["rank_peg"] or 0) * vw["peg"]
+            (row["rank_pe"] or 0) * vw["pe_forward"]
+            + (row["rank_ev_ebitda"] or 0) * vw["ev_ebitda"]
+            + (row["rank_peg"] or 0) * vw["peg"]
         )
 
     if pd.notna(row.get("pe_flag")):
@@ -190,20 +186,23 @@ def stock_scoring_pipeline(all_data, symbols):
     df["rank_roe"] = compute_percentile_ranks(df, "roe")
     # Cap ROE au percentile 80 pour les tickers avec buyback-inflated ROE (spec §4.1)
     if "roe_capped" in df.columns:
-        df.loc[df["roe_capped"] == True, "rank_roe"] = df.loc[df["roe_capped"] == True, "rank_roe"].clip(upper=80)
-    df["rank_margin"] = df.groupby("sector")["margin"].transform(
-        compute_percentile_ranks, column="margin"
-    )
+        df.loc[df["roe_capped"].fillna(False), "rank_roe"] = df.loc[df["roe_capped"].fillna(False), "rank_roe"].clip(
+            upper=80
+        )
+    df["rank_margin"] = df.groupby("sector")["margin"].transform(compute_percentile_ranks, column="margin")
     df["rank_debt"] = compute_percentile_ranks(df, "debt_ebitda", ascending=False)
     df["rank_fcf"] = compute_percentile_ranks(df, "fcf_yield")
-    df["rank_pe"] = df.groupby("sector")["pe"].transform(
-        compute_percentile_ranks, column="pe", ascending=False
-    )
+    df["rank_pe"] = df.groupby("sector")["pe"].transform(compute_percentile_ranks, column="pe", ascending=False)
     df["rank_ev_ebitda"] = df.groupby("sector")["ev_ebitda"].transform(
         compute_percentile_ranks, column="ev_ebitda", ascending=False
     )
     df["rank_peg"] = compute_percentile_ranks(df, "peg", ascending=False)
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
+    # v1.1 — rank sur momentum ajusté volatilité (fallback rank_perf_6m si momentum_adj absent)
+    if "momentum_adj" in df.columns and df["momentum_adj"].notna().any():
+        df["rank_momentum_adj"] = compute_percentile_ranks(df, "momentum_adj")
+    else:
+        df["rank_momentum_adj"] = df["rank_perf_6m"]
     df["rank_outperf_6m"] = compute_percentile_ranks(df, "outperf_6m")
     df["rank_perf_3m"] = compute_percentile_ranks(df, "perf_3m")
     df["rank_surprise"] = compute_percentile_ranks(df, "surprise_pct")
@@ -227,15 +226,15 @@ def stock_scoring_pipeline(all_data, symbols):
     # Scores qualité
     qw = CONFIG["scoring"]["quality_subweights"]
     df["score_quality"] = (
-        df["rank_roe"].fillna(0) * qw["roe"] +
-        df["rank_margin"].fillna(0) * qw["margin"] +
-        df["rank_fcf"].fillna(0) * qw["fcf_yield"] +
-        df["rank_debt"].fillna(0) * qw["debt_ebitda"]
+        df["rank_roe"].fillna(0) * qw["roe"]
+        + df["rank_margin"].fillna(0) * qw["margin"]
+        + df["rank_fcf"].fillna(0) * qw["fcf_yield"]
+        + df["rank_debt"].fillna(0) * qw["debt_ebitda"]
     )
 
     v_results = df.apply(compute_valuation_score, axis=1)
     df["score_valuation"] = v_results.apply(lambda x: x[0])
-    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1])
+    df["v_ok"] = df["v_ok"] & v_results.apply(lambda x: x[1]).fillna(False)
 
     # T013: Score momentum per-row avec décroissance earnings (Lacune 6)
     base_mw = CONFIG["scoring"]["momentum_subweights"]
@@ -244,11 +243,11 @@ def stock_scoring_pipeline(all_data, symbols):
     def _row_momentum_score(row):
         w = compute_momentum_weights(row.get("surprise_date"), base_mw, today)
         return (
-            row.get("rank_perf_6m", 0) * w["perf_6m"] +
-            (row.get("rank_outperf_6m") or 0) * w["outperf_6m"] +
-            (row.get("rank_perf_3m") or 0) * w["perf_3m"] +
-            row.get("rank_surprise", 0) * w["surprise_earnings"] +
-            (row.get("rank_analyst_revision") or 0) * w.get("analyst_revision", 0)
+            row.get("rank_momentum_adj", row.get("rank_perf_6m", 0)) * w["perf_6m"]
+            + (row.get("rank_outperf_6m") or 0) * w["outperf_6m"]
+            + (row.get("rank_perf_3m") or 0) * w["perf_3m"]
+            + row.get("rank_surprise", 0) * w["surprise_earnings"]
+            + (row.get("rank_analyst_revision") or 0) * w.get("analyst_revision", 0)
         )
 
     df["score_momentum"] = df.apply(_row_momentum_score, axis=1)
@@ -258,11 +257,15 @@ def stock_scoring_pipeline(all_data, symbols):
     w = CONFIG["scoring"]["weights"]
     df["score_global"] = df.apply(
         lambda r: (
-            r["score_quality"] * w["quality"] +
-            r["score_valuation"] * w["valuation"] +
-            r["score_momentum"] * w["momentum"]
-        ) if r["v_ok"] else (r["score_quality"] * 0.5 + r["score_momentum"] * 0.5),
-        axis=1
+            (
+                r["score_quality"] * w["quality"]
+                + r["score_valuation"] * w["valuation"]
+                + r["score_momentum"] * w["momentum"]
+            )
+            if r["v_ok"]
+            else (r["score_quality"] * 0.5 + r["score_momentum"] * 0.5)
+        ),
+        axis=1,
     )
     return df.sort_values("score_global", ascending=False)
 
@@ -289,11 +292,7 @@ def etf_scoring_pipeline(all_data, etfs):
             spy_perf = (spy_data["Close"].iloc[-1] - spy_data["Close"].iloc[-126]) / spy_data["Close"].iloc[-126]
             outperf_spy = perf_6m - spy_perf
 
-        rows.append({
-            "symbol": symbol,
-            "perf_6m": perf_6m,
-            "outperf_spy": outperf_spy
-        })
+        rows.append({"symbol": symbol, "perf_6m": perf_6m, "outperf_spy": outperf_spy})
 
     if not rows:
         return pd.DataFrame()
@@ -302,9 +301,37 @@ def etf_scoring_pipeline(all_data, etfs):
     df["rank_perf_6m"] = compute_percentile_ranks(df, "perf_6m")
     df["rank_outperf_spy"] = compute_percentile_ranks(df, "outperf_spy")
 
-    df["score_global"] = (
-        df["rank_perf_6m"].fillna(0) * 0.50 +
-        df["rank_outperf_spy"].fillna(0) * 0.50
-    )
+    df["score_global"] = df["rank_perf_6m"].fillna(0) * 0.50 + df["rank_outperf_spy"].fillna(0) * 0.50
 
     return df.sort_values("score_global", ascending=False)
+
+
+def compute_inverse_vol_weights(ranked_df: pd.DataFrame, all_data: dict) -> pd.DataFrame:
+    """
+    v1.1 — Pondération inverse de la volatilité pour les signaux Top 10.
+    Calcule suggested_weight_pct = (1/σ_i) / Σ(1/σ_j) × 100.
+    σ = écart-type des rendements journaliers sur 63j.
+    Tickers sans historique suffisant reçoivent le poids moyen.
+    """
+    symbols = list(ranked_df["symbol"])
+    inv_vols: dict[str, float] = {}
+
+    for sym in symbols:
+        prices = all_data.get(sym, {}).get("prices")
+        if prices is not None and len(prices) >= 60:
+            daily_ret = prices["Close"].iloc[-60:].pct_change().dropna()
+            sigma = float(daily_ret.std())
+            if sigma > 1e-9:
+                inv_vols[sym] = 1.0 / sigma
+
+    if not inv_vols:
+        ranked_df["suggested_weight_pct"] = 100.0 / len(symbols) if symbols else None
+        return ranked_df
+
+    mean_inv_vol = sum(inv_vols.values()) / len(inv_vols)
+    total_inv_vol = sum(inv_vols.get(s, mean_inv_vol) for s in symbols)
+
+    weights = {s: (inv_vols.get(s, mean_inv_vol) / total_inv_vol) * 100.0 for s in symbols}
+    ranked_df = ranked_df.copy()
+    ranked_df["suggested_weight_pct"] = ranked_df["symbol"].map(weights)
+    return ranked_df

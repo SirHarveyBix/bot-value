@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from scanner.config import logger
 
+VOLATILITY_FLOOR = 0.0005  # Plancher 0.05% σ journalier — évite division par quasi-zéro
+
 
 def compute_analyst_revision_3m(estimates: list) -> float | None:
     """Calcule la révision EPS analystes sur 3 mois (Lacune 5)."""
@@ -12,6 +14,7 @@ def compute_analyst_revision_3m(estimates: list) -> float | None:
     if not current_eps or not prev_eps or abs(prev_eps) < 1e-6:
         return None
     return (current_eps - prev_eps) / abs(prev_eps)
+
 
 SECTOR_ETF_MAP = {
     "Technology": "XLK",
@@ -24,8 +27,9 @@ SECTOR_ETF_MAP = {
     "Materials": "XLB",
     "Real Estate": "XLRE",
     "Utilities": "XLU",
-    "Communication Services": "XLC"
+    "Communication Services": "XLC",
 }
+
 
 def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
     """
@@ -33,7 +37,7 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
     prices_df: OHLCV du ticker.
     sector_prices_df: OHLCV de l'ETF sectoriel correspondant.
     """
-    if prices_df is None or len(prices_df) < 126: # 126 jours = ~6 mois
+    if prices_df is None or len(prices_df) < 126:  # 126 jours = ~6 mois
         return {}
 
     try:
@@ -44,6 +48,14 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
         perf_6m = (p_now - close.iloc[-126]) / close.iloc[-126] if len(close) >= 126 else None
         perf_3m = (p_now - close.iloc[-63]) / close.iloc[-63] if len(close) >= 63 else None
         perf_1m = (p_now - close.iloc[-21]) / close.iloc[-21] if len(close) >= 21 else None
+
+        # v1.1 — Momentum ajusté volatilité : return_6m / σ_daily_6M (Daniel & Moskowitz 2016)
+        momentum_adj = None
+        if perf_6m is not None and len(close) >= 126:
+            daily_returns = close.iloc[-126:].pct_change().dropna()
+            sigma_6m = float(daily_returns.std())
+            effective_vol = max(sigma_6m, VOLATILITY_FLOOR)
+            momentum_adj = perf_6m / effective_vol
 
         # Surperf sectorielle
         outperf_6m = None
@@ -60,12 +72,14 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
             "perf_6m": perf_6m,
             "perf_3m": perf_3m,
             "perf_1m": perf_1m,
+            "momentum_adj": momentum_adj,
             "outperf_6m": outperf_6m,
-            "surprise_pct": surprise_pct
+            "surprise_pct": surprise_pct,
         }
     except Exception as e:
         logger.error(f"Erreur calcul momentum: {e}")
-        return {}
+        return None
+
 
 def apply_momentum_penalties(score, metrics):
     """

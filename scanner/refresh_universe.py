@@ -17,13 +17,14 @@ def refresh_sp500():
         sp500_df = tables[0]
 
         # Nettoyage des symboles (certains utilisent '.' au lieu de '-')
-        tickers = sp500_df["Symbol"].str.replace('.', '-', regex=False).tolist()
+        tickers = sp500_df["Symbol"].str.replace(".", "-", regex=False).tolist()
 
         logger.info(f"{len(tickers)} tickers récupérés pour le S&P 500.")
         return tickers
     except Exception as e:
         logger.error(f"Erreur lors de la récupération du S&P 500: {e}")
         return []
+
 
 def update_universe_file(new_stocks=None, new_etfs=None):
     """
@@ -35,7 +36,7 @@ def update_universe_file(new_stocks=None, new_etfs=None):
     # Charger l'existant
     current_data = {"stocks": [], "etfs": []}
     if os.path.exists(path):
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             current_data = json.load(f)
 
     if new_stocks:
@@ -48,7 +49,7 @@ def update_universe_file(new_stocks=None, new_etfs=None):
         current_data["etfs"] = sorted(updated_etfs)
 
     try:
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(current_data, f, indent=2)
         logger.info(
             f"Fichier univers mis à jour avec succès : "
@@ -56,6 +57,7 @@ def update_universe_file(new_stocks=None, new_etfs=None):
         )
     except Exception as e:
         logger.error(f"Erreur écriture univers: {e}")
+
 
 def refresh_nifty50():
     """
@@ -67,11 +69,12 @@ def refresh_nifty50():
         tables = pd.read_html(url)
         # Wikipedia table index might change, usually it's the 1st or 2nd
         df = tables[1]
-        tickers = [f"{s}.NS" for s in df["Symbol"].tolist()] # Format Yahoo pour l'Inde
+        tickers = [f"{s}.NS" for s in df["Symbol"].tolist()]  # Format Yahoo pour l'Inde
         return tickers
     except Exception as e:
         logger.error(f"Erreur NIFTY 50: {e}")
         return []
+
 
 def refresh_from_url(url, column_name="Symbol"):
     """
@@ -87,6 +90,7 @@ def refresh_from_url(url, column_name="Symbol"):
     except Exception as e:
         logger.error(f"Erreur extraction URL {url}: {e}")
         return []
+
 
 if __name__ == "__main__":
     import sys

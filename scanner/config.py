@@ -8,6 +8,7 @@ from loguru import logger
 # Charger les variables d'environnement (.env)
 load_dotenv()
 
+
 def setup_logging():
     """Configure loguru pour le projet."""
     logger.remove()
@@ -19,6 +20,10 @@ def setup_logging():
     )
     logger.add(sys.stdout, format=format_str, level="INFO")
     logger.add("data/logs/scanner_{time:YYYY-MM-DD}.log", rotation="00:00", retention="30 days", level="DEBUG")
+    logger.add(
+        "data/logs/signals_{time:YYYY-MM-DD}.jsonl", serialize=True, rotation="00:00", retention="90 days", level="INFO"
+    )
+
 
 def load_config():
     """Charge la configuration YAML et injecte les variables d'env."""
@@ -27,7 +32,7 @@ def load_config():
         logger.error(f"Fichier de configuration {config_path} introuvable.")
         sys.exit(1)
 
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         # On utilise SafeLoader et on gère manuellement l'interpolation des env vars simples
         config_str = f.read()
 
@@ -39,6 +44,7 @@ def load_config():
 
     config = yaml.safe_load(config_str)
     return config
+
 
 # Initialisation au chargement du module
 setup_logging()

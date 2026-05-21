@@ -1,16 +1,16 @@
 import json
 import os
-
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 import yfinance as yf
 
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
-from datetime import datetime, timedelta
 
 # On définit le TTL du cache fondamentaux (24h)
 TTL_FUNDAMENTALS = 24 * 3600
+
 
 def load_universe():
     """Charge l'univers complet depuis le fichier JSON."""
@@ -19,8 +19,9 @@ def load_universe():
         logger.error(f"Fichier univers {universe_path} introuvable.")
         return {"stocks": [], "etfs": []}
 
-    with open(universe_path, 'r') as f:
+    with open(universe_path, "r") as f:
         return json.load(f)
+
 
 def get_eligibility_filters(ticker_info):
     """
@@ -57,13 +58,14 @@ def get_eligibility_filters(ticker_info):
         # On vérifie si firstTradeDateEpochUtc est présent (yfinance .info)
         first_trade = ticker_info.get("firstTradeDateEpochUtc")
         if first_trade:
-            two_years_ago = (datetime.now() - timedelta(days=365*2)).timestamp()
+            two_years_ago = (datetime.now() - timedelta(days=365 * 2)).timestamp()
             if first_trade > two_years_ago:
                 return False, "Moins de 2 ans d'historique"
 
         return True, None
     except Exception as e:
         return False, f"Erreur lors du filtrage: {str(e)}"
+
 
 def _check_single_ticker(symbol):
     """Fonction helper pour le filtrage parallèle."""
@@ -73,20 +75,24 @@ def _check_single_ticker(symbol):
         if not info:
             # On ajoute un petit délai aléatoire ou fixe pour éviter de bombarder
             import time
+
             delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
             if delay > 0:
                 time.sleep(delay)
-                
+
             ticker = yf.Ticker(symbol)
             info = ticker.info
             if info:
                 cache.set("fundamentals", symbol, info)
 
         is_eligible, reason = get_eligibility_filters(info)
+        if not is_eligible:
+            logger.debug(f"Exclu {symbol}: {reason}")
         return symbol if is_eligible else None
     except Exception as e:
         logger.error(f"Erreur filtrage {symbol}: {e}")
         return None
+
 
 def build_eligible_universe(stocks):
     """

@@ -1,22 +1,30 @@
 import argparse
 import asyncio
+import sqlite3 as _sqlite3
 from datetime import datetime
 
 import pandas_market_calendars as mcal
 from apscheduler import AsyncScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone
-import sqlite3 as _sqlite3
 
-from scanner.config import CONFIG, logger
 import scanner.fetcher as _fetcher
+from scanner.config import CONFIG, logger
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import notify, notify_panic
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
-from scanner.storage import save_scan_entry, save_signals, save_scanned_universe, update_signal_returns, DB_PATH, get_first_seen_date
+from scanner.storage import (
+    DB_PATH,
+    get_first_seen_date,
+    save_scan_entry,
+    save_scanned_universe,
+    save_signals,
+    update_signal_returns,
+)
 from scanner.universe import build_eligible_universe, load_universe
+
 
 def is_market_open():
     """Vérifie si le NYSE est ouvert aujourd'hui."""
@@ -24,6 +32,7 @@ def is_market_open():
     today = datetime.now().date()
     schedule = nyse.schedule(start_date=today, end_date=today)
     return not schedule.empty
+
 
 async def run_scanner(force=False):
     """Fonction principale du job de scan (asynchrone)."""
@@ -53,7 +62,9 @@ async def run_scanner(force=False):
             current_vix = vix_close.iloc[-1].item()
 
             regime = evaluate_market_regime(current_vix, current_spy, ema200)
-            logger.info(f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}")
+            logger.info(
+                f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}"
+            )
 
         market_regime = regime.value
 
@@ -64,7 +75,7 @@ async def run_scanner(force=False):
                 "spy_ema200": ema200,
                 "vix": current_vix,
             }
-            save_scan_entry(market_data)
+            await save_scan_entry(market_data)
             await notify_panic(current_vix, current_spy, ema200)
             return
 
@@ -120,15 +131,10 @@ async def run_scanner(force=False):
         # T049: Anti survivorship bias — stocker univers Chalutier complet
         scan_date_str = datetime.now().strftime("%Y-%m-%d")
         top10_symbols = top_10_stocks["symbol"].tolist() if not top_10_stocks.empty else []
-        save_scanned_universe(momentum_ranked_df, shortlist_stocks, top10_symbols, scan_date=scan_date_str)
+        await save_scanned_universe(momentum_ranked_df, shortlist_stocks, top10_symbols, scan_date=scan_date_str)
 
         # 8. Storage
-        market_data = {
-            "regime": market_regime,
-            "spy_price": current_spy,
-            "spy_ema200": ema200,
-            "vix": current_vix
-        }
+        market_data = {"regime": market_regime, "spy_price": current_spy, "spy_ema200": ema200, "vix": current_vix}
         save_signals(top_10_stocks, top_5_etfs, all_data, len(eligible_stocks), market_data=market_data)
 
         # Gap 1: enrichir top_10_stocks avec first_seen_date depuis SQLite avant notify
@@ -156,6 +162,7 @@ async def run_scanner(force=False):
     except Exception as e:
         logger.exception(f"Erreur critique lors du scan: {e}")
 
+
 async def main():
     parser = argparse.ArgumentParser(description="ValueMomentum Scanner")
     parser.add_argument("--force", action="store_true", help="Force le scan même si le marché est fermé")
@@ -174,21 +181,20 @@ async def main():
 
         # Job principal : scan quotidien 09h35 ET
         await scheduler.add_schedule(
-            run_scanner,
-            trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=35, timezone=tz),
-            id="daily_scan"
+            run_scanner, trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=35, timezone=tz), id="daily_scan"
         )
 
         # T028: Job secondaire : mise à jour retours 18h00 ET (Lacune 11)
         await scheduler.add_schedule(
             update_signal_returns,
             trigger=CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone=tz),
-            id="update_returns"
+            id="update_returns",
         )
 
         logger.info("Scheduler configuré : scan 09h35 ET + retours 18h00 ET, lundi-vendredi.")
 
         await scheduler.run_until_stopped()
+
 
 if __name__ == "__main__":
     try:

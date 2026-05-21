@@ -11,12 +11,13 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 3. [Installation](#installation)
 4. [Configuration](#configuration)
 5. [Test rapide](#test-rapide)
-6. [Mode production (24/7)](#mode-production-247)
-7. [Démarrage automatique au boot](#démarrage-automatique-au-boot-mac)
-8. [Gestion de l'univers de tickers](#gestion-de-lunivers-de-tickers)
-9. [Dashboard Web](#dashboard-web)
-10. [Logs](#logs)
-11. [Structure des fichiers](#structure-des-fichiers)
+6. [Tests unitaires & Qualité du code](#tests-unitaires--qualité-du-code)
+7. [Mode production (24/7)](#mode-production-247)
+8. [Démarrage automatique au boot](#démarrage-automatique-au-boot-mac)
+9. [Gestion de l'univers de tickers](#gestion-de-lunivers-de-tickers)
+10. [Dashboard Web](#dashboard-web)
+11. [Logs](#logs)
+12. [Structure des fichiers](#structure-des-fichiers)
 
 ---
 
@@ -37,7 +38,7 @@ Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'ag
 - **macOS** (optimisé Mac Mini, mais fonctionne sur tout Mac)
 - **Python 3.11+** — vérifiez avec `python3 --version`
 - **Git** — pour cloner le projet
-- **Compte Financial Modeling Prep** (gratuit) — 250 appels/jour suffisent
+- **Compte Financial Modeling Prep** (gratuit) — limite nominale 250 appels/jour, disjoncteur hard limit à 245
 - **Bot Telegram** — pour recevoir les alertes
 
 ---
@@ -119,6 +120,69 @@ python3 main.py --now --force
 - `--force` : ignore la vérification du calendrier NYSE.
 
 Un scan complet sur l'univers par défaut (~40 tickers) prend environ **2 à 5 minutes**. Vous recevrez un message Telegram à la fin.
+
+---
+
+## Tests unitaires & Qualité du code
+
+### Lancer les tests
+
+```bash
+source venv/bin/activate
+
+# Tous les tests avec sortie détaillée
+pytest tests/ -v --tb=short
+
+# Un fichier spécifique
+pytest tests/test_logic.py -v
+
+# Un test précis
+pytest tests/test_logic.py::test_market_gate_panic_vix_over_35 -v
+
+# Tests en parallèle (si pytest-xdist installé)
+pytest tests/ -n auto
+```
+
+> Les tests sont **hermétiques** (aucun appel réseau réel) : ils utilisent `freezegun` pour les dates, des mocks pour les APIs et des fixtures statiques pour les prix.
+
+### Linter — Ruff
+
+Le projet utilise **[Ruff](https://docs.astral.sh/ruff/)** comme linter et formateur (configuré dans `pyproject.toml`).
+
+```bash
+source venv/bin/activate
+
+# Vérification lint
+ruff check .
+
+# Correction automatique
+ruff check . --fix
+
+# Vérification formatage
+ruff format --check .
+
+# Appliquer le formatage
+ruff format .
+```
+
+### Pre-commit (optionnel)
+
+Un hook pre-commit est configuré pour lancer Ruff automatiquement à chaque commit :
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Les hooks s'exécutent ensuite à chaque `git commit`. Pour lancer manuellement sur tous les fichiers :
+
+```bash
+pre-commit run --all-files
+```
+
+### CI/CD
+
+Les tests et le lint s'exécutent automatiquement sur GitHub Actions à chaque push/PR sur `main` (voir `.github/workflows/`).
 
 ---
 

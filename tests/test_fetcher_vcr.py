@@ -1,9 +1,12 @@
-import pytest
 from unittest.mock import patch
-from scanner.config import CONFIG, logger
-from scanner.fetcher import fetch_all_data, FMPUnavailableError
+
+import pytest
+
+from scanner.config import logger
+from scanner.fetcher import fetch_all_data
 
 pytestmark = pytest.mark.asyncio
+
 
 @pytest.mark.vcr
 async def test_fetcher_vcr():
@@ -16,9 +19,14 @@ async def test_fetcher_vcr():
     test_tickers = ["AAPL", "MSFT"]
 
     mock_info = {
-        "symbol": "AAPL", "longName": "Apple Inc.", "sector": "Technology",
-        "marketCap": 3_000_000_000_000, "source": "FMP",
-        "surprise_pct": 0.0, "surprise_date": None, "analyst_revision_3m": None,
+        "symbol": "AAPL",
+        "longName": "Apple Inc.",
+        "sector": "Technology",
+        "marketCap": 3_000_000_000_000,
+        "source": "FMP",
+        "surprise_pct": 0.0,
+        "surprise_date": None,
+        "analyst_revision_3m": None,
     }
 
     async def mock_fetch_ticker(symbol, client=None):
