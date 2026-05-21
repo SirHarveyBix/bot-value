@@ -307,6 +307,7 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 - BF-007 — `engine.py` + `filters.py` : exclusions qualité/fraîcheur silencieuses (debug level) → changées en INFO + collectées dans `exclusions_out: list | None`
 - BF-008 — `notifier.py` : ajout `notify_exclusions()` (tickers exclus avec raison par gate) + `notify_yfinance_ban()` (ban IP détecté lors du batch download)
 - BF-009 — `main.py` : `notify_yfinance_ban()` câblé sur `check_batch_data_ratio` failure ; `notify_exclusions()` envoyé après les signaux normaux
+- BF-010 — `fetcher.py` + `config.yaml` : API FMP v3 dépréciée août 2025 (retourne 403 sur tous les endpoints). Migration vers `/stable/` : URL format `?symbol=` au lieu de path param, nouveaux field names Pydantic (`priceToEarningsRatioTTM`, `returnOnEquityTTM` → key-metrics, `freeCashFlowYieldTTM`×marketCap pour montant FCF), suppression des endpoints indisponibles sur plan gratuit (`earnings-surprises` 404, `analyst-estimates` 402), budget réduit de 7→5 appels/ticker (175 max). Tests unitaires + intégration mis à jour.
 
 - **Tâches [P]** (parallélisables) : 42
 - **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches — ✅ complet
