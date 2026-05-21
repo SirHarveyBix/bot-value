@@ -381,7 +381,7 @@ async def test_fetch_fmp_data_success():
     - 5 endpoints (earnings-surprises 404, analyst-estimates 402 non appelés)
     - Nouveaux field names stable : priceToEarningsRatioTTM, returnOnEquityTTM en key-metrics, etc.
     - freeCashflow = freeCashFlowYieldTTM × marketCap
-    - surprise_pct = 0.0 (endpoint indisponible sur plan gratuit)
+    - surprise_pct = None (endpoint indisponible sur plan gratuit — inconnu ≠ pas de surprise)
     """
     from unittest.mock import MagicMock, patch
 
@@ -437,7 +437,7 @@ async def test_fetch_fmp_data_success():
     assert result is not None
     assert result["sector"] == "Technology"
     assert result["totalCash"] is None
-    assert result["surprise_pct"] == 0.0  # endpoint indisponible plan gratuit
+    assert result["surprise_pct"] is None  # endpoint indisponible plan gratuit (BF-012)
     assert result["analyst_revision_3m"] is None
     assert result["source"] == "FMP"
     assert abs(result["forwardPE"] - 20.0) < 1e-9
