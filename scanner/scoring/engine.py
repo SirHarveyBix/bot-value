@@ -10,6 +10,7 @@ from scanner.filters import sanity_check_gate
 from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, calculate_momentum_metrics
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
 from scanner.scoring.valuation import apply_valuation_gates, calculate_valuation_metrics
+from scanner.universe import is_eligible_etf
 
 RATIO_CLAMP: dict[str, tuple[float, float]] = {
     "roe": (0.0, 1.50),
@@ -283,6 +284,11 @@ def etf_scoring_pipeline(all_data, etfs):
     for symbol in etfs:
         data = all_data.get(symbol)
         if not data or data["prices"] is None:
+            continue
+
+        name = (data.get("info") or {}).get("longName", "")
+        if not is_eligible_etf(symbol, name):
+            logger.debug(f"ETF exclu (levier/inverse): {symbol} ({name})")
             continue
 
         prices = data["prices"]

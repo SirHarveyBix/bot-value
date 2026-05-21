@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -8,8 +9,27 @@ import yfinance as yf
 from scanner.cache import cache
 from scanner.config import CONFIG, logger
 
-# On définit le TTL du cache fondamentaux (24h)
 TTL_FUNDAMENTALS = 24 * 3600
+
+EXCLUDED_ETF_PATTERNS = [
+    "3X",
+    "2X",
+    "-3",
+    "-2",
+    "ULTRA",
+    "ULTRA SHORT",
+    "BEAR",
+    "SHORT",
+    "INVERSE",
+    "DAILY",
+    "PROSHARES",
+]
+
+
+def is_eligible_etf(ticker: str, name: str = "") -> bool:
+    """Retourne False si l'ETF est à effet de levier ou inverse."""
+    check = name.upper() if name else ticker.upper()
+    return not any(pat in check for pat in EXCLUDED_ETF_PATTERNS)
 
 
 def load_universe():
@@ -73,9 +93,6 @@ def _check_single_ticker(symbol):
         # Tenter de récupérer depuis le cache d'abord
         info = cache.get("fundamentals", symbol, TTL_FUNDAMENTALS)
         if not info:
-            # On ajoute un petit délai aléatoire ou fixe pour éviter de bombarder
-            import time
-
             delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
             if delay > 0:
                 time.sleep(delay)

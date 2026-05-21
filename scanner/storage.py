@@ -430,17 +430,25 @@ def update_portfolio_flags(scan_date: str, portfolio: dict, exits_today: list) -
 
 
 def get_first_seen_dates_batch(symbols: list[str], today_str: str) -> dict[str, str]:
-    """Retourne {symbol: first_seen_date} pour une liste de symboles (batch, une seule connexion)."""
-    result: dict[str, str] = {}
+    """Retourne {symbol: first_seen_date} pour une liste de symboles via une seule requête IN."""
+    result: dict[str, str] = {s: today_str for s in symbols}
+    if not symbols:
+        return result
     try:
         conn = sqlite3.connect(DB_PATH)
-        for symbol in symbols:
-            result[symbol] = get_first_seen_date(conn, symbol) or today_str
+        placeholders = ",".join("?" * len(symbols))
+        rows = conn.execute(
+            f"SELECT symbol, first_seen_date FROM signals s "
+            f"WHERE symbol IN ({placeholders}) AND first_seen_date IS NOT NULL "
+            f"AND id = (SELECT MAX(id) FROM signals WHERE symbol = s.symbol AND first_seen_date IS NOT NULL)",
+            symbols,
+        ).fetchall()
         conn.close()
+        for sym, fsd in rows:
+            if fsd:
+                result[sym] = fsd
     except Exception as e:
         logger.warning(f"get_first_seen_dates_batch: {e}")
-        for s in symbols:
-            result.setdefault(s, today_str)
     return result
 
 

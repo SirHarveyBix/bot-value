@@ -217,6 +217,41 @@ Le scanner se déclenche automatiquement chaque jour ouvré à **09h35 ET** (heu
 
 ---
 
+## Déploiement Mac Mini
+
+### Prévenir la mise en veille
+
+Sur Mac Mini en production, désactivez tous les modes de veille pour éviter toute interruption :
+
+```bash
+sudo pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0
+```
+
+| Option          | Valeur | Effet                               |
+| --------------- | ------ | ----------------------------------- |
+| `sleep`         | 0      | Désactive la mise en veille système |
+| `disksleep`     | 0      | Disque jamais mis en veille         |
+| `hibernatemode` | 0      | Pas d'hibernation                   |
+| `powernap`      | 0      | Désactive les tâches en veille      |
+
+### Installation complète sur Mac Mini
+
+```bash
+# 1. Cloner et configurer
+git clone https://github.com/SirHarveyBix/bot-value.git
+cd bot-value
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env && nano .env   # Renseigner les 3 clés
+
+# 2. Lancer supervisord (process manager)
+supervisord -c supervisord.conf
+supervisorctl -c supervisord.conf status   # Doit afficher scanner + web RUNNING
+```
+
+---
+
 ## Démarrage automatique au boot (Mac)
 
 Pour que le scanner redémarre automatiquement au démarrage du Mac Mini, exécutez ce bloc **depuis le dossier du projet** :

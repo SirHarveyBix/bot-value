@@ -17,7 +17,7 @@
 - [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 245`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 97200`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 120`, `DATA_FRESHNESS_EXCLUSION_DAYS: 180`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
 - [x] T002 [P] Créer `.env.example` à la racine avec placeholders : `TELEGRAM_BOT_TOKEN=`, `TELEGRAM_CHAT_ID=`, `FMP_API_KEY=`
 - [x] T003 [P] Créer/vérifier `requirements.txt` avec dépendances épinglées : `yfinance>=0.2.40,<0.3.0`, `pandas>=2.1.0,<3.0.0`, `numpy>=1.26.0,<2.0.0`, `apscheduler>=4.0.0a5`, `pandas-market-calendars>=4.3.0`, `python-telegram-bot>=21.0,<22.0`, `httpx>=0.27.0,<0.28.0`, `PyYAML>=6.0.1,<7.0.0`, `python-dotenv>=1.0.0,<2.0.0`, `loguru>=0.7.2,<1.0.0`, `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`, `vcrpy`, `freezegun`, `supervisor>=4.2.0`
-- [ ] T004 [P] Créer les packages Python vides : `scanner/__init__.py`, `scanner/scoring/__init__.py`
+- [x] T004 [P] Créer les packages Python vides : `scanner/__init__.py`, `scanner/scoring/__init__.py`
 - [x] T005 Implémenter `scanner/storage.py` : fonction `create_db(db_path)` → connexion SQLite, `PRAGMA journal_mode=WAL`, `CREATE TABLE IF NOT EXISTS scans`, `signals`, `scanned_universe`, `universe_metadata` (schémas complets §7.2 spec)
 - [x] T006 Créer `main.py` : chargement `config.yaml` + `.env`, init DB (`create_db()`), APScheduler 4.x `AsyncScheduler`, job `cron` lundi-vendredi 09h35 ET, vérification NYSE via `pandas_market_calendars`, log "Prochain scan : [date]"
 - [x] T007 [P] Créer `supervisord.conf` à la racine : `[program:scanner]` + `[program:web]` avec `%(here)s`, `TZ="America/New_York"`, `startretries=5`, logs vers `data/logs/`
@@ -132,11 +132,11 @@
 
 **Test indépendant** : TQQQ → exclu. SOXL → exclu. XLK → scoré (score = perf_6m×0.5 + surperf_vs_SPY×0.5). Section `📦 TOP ETFs DU JOUR` séparée.
 
-- [ ] T053 [US5] Implémenter `is_eligible_etf(ticker: str, name: str) -> bool` dans `scanner/universe.py` : `EXCLUDED_ETF_PATTERNS = ["3X", "2X", "-3", "-2", "ULTRA", "ULTRA SHORT", "BEAR", "SHORT", "INVERSE", "DAILY", "PROSHARES"]`, retourne `not any(pat in name.upper() for pat in patterns)`
-- [ ] T054 [US5] Implémenter `etf_scoring_pipeline(etfs_data, prices_df) -> DataFrame` dans `scanner/scoring/engine.py` : score = `perf_6m × 0.50 + surperf_vs_spy × 0.50`, 0 appel FMP, 0 métrique fondamentale, filtre `is_eligible_etf()` avant scoring
-- [ ] T055 [P] [US5] Implémenter `format_etf_signal(etf_data, rank) -> str` dans `scanner/notifier.py` : format §6.2 spec, section commençant par `📦 TOP ETFs DU JOUR`
+- [x] T053 [US5] Implémenter `is_eligible_etf(ticker: str, name: str) -> bool` dans `scanner/universe.py` : `EXCLUDED_ETF_PATTERNS = ["3X", "2X", "-3", "-2", "ULTRA", "ULTRA SHORT", "BEAR", "SHORT", "INVERSE", "DAILY", "PROSHARES"]`, retourne `not any(pat in name.upper() for pat in patterns)`
+- [x] T054 [US5] Implémenter `etf_scoring_pipeline(etfs_data, prices_df) -> DataFrame` dans `scanner/scoring/engine.py` : score = `perf_6m × 0.50 + surperf_vs_spy × 0.50`, 0 appel FMP, 0 métrique fondamentale, filtre `is_eligible_etf()` avant scoring
+- [x] T055 [P] [US5] Implémenter `format_etf_signal(etf_data, rank) -> str` dans `scanner/notifier.py` : format §6.2 spec, section commençant par `📦 TOP ETFs DU JOUR`
 - [x] T056 [US5] Câbler ETF pipeline dans `main.py` : après shortlisting Actions, scorer ETFs séparément → Top 5 → `save_signals(signal_type='etf')` → `send_etf_signals()` en section Telegram distincte
-- [ ] T057 [P] [US5] Tests `tests/test_logic.py` : TQQQ (nom "ProShares UltraPro QQQ") → `is_eligible_etf()` retourne False; SOXL ("Direxion Daily Semiconductor Bull 3X Shares") → False; XLK ("Technology Select Sector SPDR") → True; score ETF = perf_6m×0.5 + surperf×0.5 sans FMP
+- [x] T057 [P] [US5] Tests `tests/test_logic.py` : TQQQ (nom "ProShares UltraPro QQQ") → `is_eligible_etf()` retourne False; SOXL ("Direxion Daily Semiconductor Bull 3X Shares") → False; XLK ("Technology Select Sector SPDR") → True; score ETF = perf_6m×0.5 + surperf×0.5 sans FMP
 
 **Checkpoint** : US5 acceptance criteria 1–3 passent. Section ETF distincte dans Telegram. 0 appel FMP pour les ETFs.
 
@@ -150,12 +150,12 @@
 - [x] T059 [P] Créer `tests/test_logic.py` complet : tests statiques scoring — `apply_quality_gates` (BVS ≤ 0, ROE None, ROE < 0, ROE > 150% + BVS < 5$ cap), decay earnings clampé [0,1], pénalités anti-extrême, winsorisation `RATIO_CLAMP`, `evaluate_market_regime` 4 scénarios
 - [x] T060 [P] Créer `tests/test_fetcher_vcr.py` : connecteurs yfinance chunked (chunk size 100, 2 cassettes) + FMP 7 endpoints (cassette par ticker) + disjoncteur 245 (mock counter)
 - [x] T061 Créer `tests/test_integration_vcr.py` : pipeline complet (VCR + Freezegun) — scan complet → `scans` + `signals` écrits, Market Gate PANIC → 0 signaux, FMP indisponible → Telegram erreur + 0 signaux
-- [ ] T062 Test mock FMP call counter : run complet 30 tickers via fixtures → assert `fmp_call_counter ≤ 245` (SC-001)
+- [x] T062 Test mock FMP call counter : run complet 30 tickers via fixtures → assert `fmp_call_counter ≤ 245` (SC-001)
 - [x] T063 [P] Vérifier exhaustivement `html.escape()` dans `notifier.py` : fixtures AT&T, Johnson & Johnson, tout nom avec `<>/&` → chaînes correctement escapées dans message final
-- [ ] T064 [P] Documenter setup Mac Mini dans `README.md` section "Déploiement" : `pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0`, clone + venv + pip install, `supervisord -c supervisord.conf`
-- [ ] T065 Créer script bash `scripts/install-launchd.sh` : génère `~/Library/LaunchAgents/com.valuemomentum.plist` depuis `PROJECT_DIR="$(pwd)"`, `launchctl load "$PLIST"` — flag `-n` obligatoire pour `KeepAlive`
-- [ ] T066 Run `pytest tests/ -v --tb=short` → assert 100% pass en isolation réseau (SC-005)
-- [ ] T067 [P] Vérifier `score_global ∈ [0, 100]` pour toutes les fixtures de test, jamais NaN (SC-003)
+- [x] T064 [P] Documenter setup Mac Mini dans `README.md` section "Déploiement" : `pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0`, clone + venv + pip install, `supervisord -c supervisord.conf`
+- [x] T065 Créer script bash `scripts/install-launchd.sh` : génère `~/Library/LaunchAgents/com.valuemomentum.plist` depuis `PROJECT_DIR="$(pwd)"`, `launchctl load "$PLIST"` — flag `-n` obligatoire pour `KeepAlive`
+- [x] T066 Run `pytest tests/ -v --tb=short` → assert 100% pass en isolation réseau (SC-005)
+- [x] T067 [P] Vérifier `score_global ∈ [0, 100]` pour toutes les fixtures de test, jamais NaN (SC-003)
 
 **Checkpoint** : SC-001 à SC-006 tous validés. `supervisorctl status` : scanner RUNNING + web RUNNING. Reboot Mac Mini → scanner redémarre automatiquement.
 

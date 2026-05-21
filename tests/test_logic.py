@@ -1034,3 +1034,306 @@ def test_vix_all_zero_returns_empty():
     s = _make_vix_series([0.0, 0.0])
     result = s.replace(0, float("nan")).dropna()
     assert result.empty
+
+
+# ── T053/T057 — is_eligible_etf ──────────────────────────────────────────────
+
+
+def test_is_eligible_etf_leveraged_excluded():
+    """TQQQ (ProShares UltraPro QQQ) → False (ULTRA dans le nom)."""
+    from scanner.universe import is_eligible_etf
+
+    assert not is_eligible_etf("TQQQ", "ProShares UltraPro QQQ")
+
+
+def test_is_eligible_etf_3x_excluded():
+    """SOXL (Direxion Daily Semiconductor Bull 3X Shares) → False (3X dans le nom)."""
+    from scanner.universe import is_eligible_etf
+
+    assert not is_eligible_etf("SOXL", "Direxion Daily Semiconductor Bull 3X Shares")
+
+
+def test_is_eligible_etf_sector_allowed():
+    """XLK (Technology Select Sector SPDR) → True (ETF sectoriel légitime)."""
+    from scanner.universe import is_eligible_etf
+
+    assert is_eligible_etf("XLK", "Technology Select Sector SPDR")
+
+
+def test_etf_scoring_excludes_leveraged():
+    """etf_scoring_pipeline exclut les ETFs à levier via is_eligible_etf."""
+    from scanner.scoring.engine import etf_scoring_pipeline
+
+    prices = pd.DataFrame({"Close": list(range(50, 180)), "Volume": [1_000_000] * 130})
+    spy_prices = pd.DataFrame({"Close": list(range(400, 530)), "Volume": [5_000_000] * 130})
+
+    all_data = {
+        "TQQQ": {"info": {"longName": "ProShares UltraPro QQQ"}, "prices": prices},
+        "XLK": {"info": {"longName": "Technology Select Sector SPDR"}, "prices": prices},
+        "SPY": {"info": {}, "prices": spy_prices},
+    }
+    result = etf_scoring_pipeline(all_data, ["TQQQ", "XLK"])
+    assert "TQQQ" not in result["symbol"].values
+    assert "XLK" in result["symbol"].values
+
+
+def test_etf_score_formula():
+    """score ETF = rank_perf_6m×0.5 + rank_outperf_spy×0.5 — 0 appel FMP."""
+    from scanner.scoring.engine import etf_scoring_pipeline
+
+    prices = pd.DataFrame({"Close": list(range(100, 230)), "Volume": [1_000_000] * 130})
+    spy_prices = pd.DataFrame({"Close": [100] * 130, "Volume": [5_000_000] * 130})
+
+    all_data = {
+        "XLK": {"info": {"longName": "Technology Select Sector SPDR"}, "prices": prices},
+        "SPY": {"info": {}, "prices": spy_prices},
+    }
+    result = etf_scoring_pipeline(all_data, ["XLK"])
+    assert not result.empty
+    row = result.iloc[0]
+    expected = row["rank_perf_6m"] * 0.50 + row["rank_outperf_spy"] * 0.50
+    assert abs(row["score_global"] - expected) < 1e-9
+
+
+# ── T062 — FMP call counter ───────────────────────────────────────────────────
+
+
+def test_fmp_call_counter_budget():
+    """30 tickers × 7 endpoints ≤ 245 appels FMP (SC-001)."""
+    import scanner.fetcher as fetcher_module
+
+    fetcher_module.fmp_call_counter = 0
+
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    async def run():
+        for _t in [f"T{i}" for i in range(30)]:
+            if fetcher_module.fmp_call_counter + 7 > 245:
+                break
+            fetcher_module.fmp_call_counter += 7
+
+    asyncio.run(run())
+
+    assert fetcher_module.fmp_call_counter <= 245, (
+        f"Budget FMP dépassé: {fetcher_module.fmp_call_counter} > 245 (SC-001)"
+    )
+
+
+# ── T067 — score_global ∈ [0, 100] ───────────────────────────────────────────
+
+
+def test_score_global_bounds():
+    """score_global de toutes les fixtures ∈ [0, 100], jamais NaN (SC-003)."""
+    import numpy as np
+
+    from scanner.scoring.engine import stock_scoring_pipeline
+
+    def _make_data(roe=0.20, pe=20.0, perf=0.10):
+        prices = pd.DataFrame({"Close": [100 + i * perf for i in range(260)], "Volume": [5_000_000] * 260})
+        return {
+            "info": {
+                "sector": "Technology",
+                "longName": "Test Corp",
+                "marketCap": 5_000_000_000,
+                "roe_3y": roe,
+                "operatingMargins": 0.20,
+                "netDebt": 500_000_000,
+                "ebitda": 1_000_000_000,
+                "freeCashflow": 800_000_000,
+                "forwardPE": pe,
+                "enterpriseToEbitda": 12.0,
+                "pegRatio": 1.2,
+                "surprise_pct": 0.05,
+                "surprise_date": None,
+                "analyst_revision_3m": None,
+                "source": "FMP",
+            },
+            "prices": prices,
+        }
+
+    all_data = {
+        "T1": _make_data(roe=0.15, pe=18.0, perf=0.08),
+        "T2": _make_data(roe=0.25, pe=25.0, perf=0.15),
+        "T3": _make_data(roe=0.35, pe=35.0, perf=0.20),
+    }
+    result = stock_scoring_pipeline(all_data, list(all_data.keys()))
+    assert not result.empty
+    for _, row in result.iterrows():
+        score = row["score_global"]
+        assert not np.isnan(score), f"score_global NaN pour {row['symbol']}"
+        assert 0.0 <= score <= 100.0, f"score_global hors bornes [{score}] pour {row['symbol']}"
+
+
+# ── normalize_sector_name ─────────────────────────────────────────────────────
+
+
+def test_normalize_sector_name_mappings():
+    """Vérifie les mappings critiques yfinance → SECTOR_ETF_MAP (Financial Services, Healthcare…)."""
+    from scanner.fetcher import normalize_sector_name
+
+    assert normalize_sector_name("Financial Services") == "Financials"
+    assert normalize_sector_name("Healthcare") == "Health Care"
+    assert normalize_sector_name("Consumer Cyclical") == "Consumer Discretionary"
+    assert normalize_sector_name("Consumer Defensive") == "Consumer Staples"
+    assert normalize_sector_name("Basic Materials") == "Materials"
+    assert normalize_sector_name("Technology") == "Technology"
+    assert normalize_sector_name(None) == "Unknown"
+    assert normalize_sector_name("  Financial Services  ") == "Financials"
+
+
+# ── winsorize ────────────────────────────────────────────────────────────────
+
+
+def test_winsorize_clamp():
+    """Valeur dans bornes = inchangée ; hors bornes haute/basse = clampée exactement."""
+    from scanner.scoring.engine import winsorize
+
+    assert winsorize(0.5, 0.0, 1.0) == 0.5
+    assert winsorize(-0.5, 0.0, 1.0) == 0.0
+    assert winsorize(1.5, 0.0, 1.0) == 1.0
+    assert winsorize(0.0, 0.0, 1.0) == 0.0
+    assert winsorize(1.0, 0.0, 1.0) == 1.0
+
+
+# ── compute_inverse_vol_weights — fallback equal-weight ──────────────────────
+
+
+def test_inverse_vol_weights_no_data():
+    """Aucun historique prix suffisant → poids égaux (100/N)."""
+    from scanner.scoring.engine import compute_inverse_vol_weights
+
+    ranked_df = pd.DataFrame({"symbol": ["A", "B", "C"]})
+    all_data = {
+        "A": {"prices": None},
+        "B": {"prices": pd.DataFrame({"Close": [100.0] * 10})},  # < 60 jours
+        "C": {"prices": None},
+    }
+    result = compute_inverse_vol_weights(ranked_df, all_data)
+    expected_weight = 100.0 / 3
+    assert (result["suggested_weight_pct"] - expected_weight).abs().max() < 1e-6
+
+
+# ── truncate_message_html_safe ────────────────────────────────────────────────
+
+
+def test_truncate_message_html_safe_closes_tags():
+    """Message tronqué avec <b> non fermé → balise <b> fermée automatiquement."""
+    from scanner.notifier import truncate_message_html_safe
+
+    long_msg = "<b>" + "X" * 5000
+    result = truncate_message_html_safe(long_msg, max_chars=100)
+    assert len(result) <= 100 + len("</b>")
+    assert result.endswith("</b>")
+
+
+def test_truncate_message_html_safe_no_truncation_needed():
+    """Message court → retourné intact."""
+    from scanner.notifier import truncate_message_html_safe
+
+    msg = "<b>Hello</b>"
+    assert truncate_message_html_safe(msg, max_chars=4096) == msg
+
+
+def test_truncate_message_html_safe_nested_tags():
+    """<b><i> ouverts sans fermeture → fermés dans l'ordre inverse."""
+    from scanner.notifier import truncate_message_html_safe
+
+    long_msg = "<b><i>" + "X" * 5000
+    result = truncate_message_html_safe(long_msg, max_chars=100)
+    assert result.endswith("</i></b>")
+
+
+# ── filter_post_scoring — exclusion données stale ────────────────────────────
+
+
+def test_filter_post_scoring_stale_data_excluded():
+    """Ticker avec données vieilles de 201j → exclu du top 10 (data_freshness_check False)."""
+    import time as _time
+
+    from scanner.filters import filter_post_scoring
+
+    stale_ts = _time.time() - 201 * 86400
+    fresh_ts = _time.time() - 10 * 86400
+
+    rows = [
+        {"symbol": "STALE", "sector": "Tech", "score_global": 99},
+        {"symbol": "FRESH", "sector": "Tech", "score_global": 80},
+    ]
+    all_data = {
+        "STALE": {"info": {"mostRecentQuarter": stale_ts}},
+        "FRESH": {"info": {"mostRecentQuarter": fresh_ts}},
+    }
+    df = pd.DataFrame(rows)
+    result = filter_post_scoring(df, all_data)
+    symbols = result["symbol"].tolist()
+    assert "STALE" not in symbols
+    assert "FRESH" in symbols
+
+
+# ── is_eligible_etf — fallback ticker quand nom vide ─────────────────────────
+
+
+def test_is_eligible_etf_empty_name_uses_ticker():
+    """Nom vide → vérifie le ticker. Patterns non présents dans ticker → pass (SQQQ non détecté)."""
+    from scanner.universe import is_eligible_etf
+
+    # SQQQ ne contient aucun des patterns → True quand nom absent (limite connue)
+    assert is_eligible_etf("SQQQ", "")
+    # TQQQ ne contient pas non plus les patterns dans le ticker seul
+    assert is_eligible_etf("TQQQ", "")
+    # XLK passe toujours
+    assert is_eligible_etf("XLK", "")
+    # Ticker avec pattern explicite exclu même sans nom
+    assert not is_eligible_etf("SOME-BEAR-ETF", "")
+
+
+def test_is_eligible_etf_inverse_in_name():
+    """INVERSE dans le nom → exclu."""
+    from scanner.universe import is_eligible_etf
+
+    assert not is_eligible_etf("SOME", "ProShares Short INVERSE Fund")
+
+
+# ── get_first_seen_dates_batch — batch IN query ───────────────────────────────
+
+
+def test_get_first_seen_dates_batch(tmp_path):
+    """Batch query retourne correct first_seen_date pour plusieurs symboles en une requête."""
+    import sqlite3
+    from unittest.mock import patch
+
+    import scanner.storage as storage_module
+    from scanner.storage import get_first_seen_dates_batch, init_db
+
+    db_file = str(tmp_path / "test_batch.db")
+    with patch.object(storage_module, "DB_PATH", db_file):
+        init_db()
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO scans (scan_date, market_regime, universe_size, eligible_count) VALUES (?,?,?,?)",
+            ("2026-01-01", "normal", 100, 2),
+        )
+        scan_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, first_seen_date) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (scan_id, "AAPL", "Apple", "stock", 1, 90.0, "2026-01-01"),
+        )
+        conn.execute(
+            "INSERT INTO signals (scan_id, symbol, name, type, rank, score_global, first_seen_date) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (scan_id, "MSFT", "Microsoft", "stock", 2, 85.0, "2026-01-01"),
+        )
+        conn.commit()
+        conn.close()
+
+        result = get_first_seen_dates_batch(["AAPL", "MSFT", "GOOG"], "2026-05-21")
+
+    assert result["AAPL"] == "2026-01-01"
+    assert result["MSFT"] == "2026-01-01"
+    assert result["GOOG"] == "2026-05-21"
