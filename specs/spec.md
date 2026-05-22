@@ -137,8 +137,8 @@ Filtre d'éligibilité strict sur ~700 tickers, scoring sur les 30 meilleurs en 
 
 1. **Given** `marketCap < 2B$` ou `volume_dollar_20j < 5M$` ou `price < 5$`, **When** filtre éligibilité, **Then** ticker exclu, loggé `eligibility_filter`
 2. **Given** `sector = None` (yfinance), **When** pipeline Actions, **Then** exclu avec motif `sector_missing`
-3. **Given** données FMP > 120 jours, **When** ticker dans Top 10, **Then** flag `⚠️ données potentiellement périmées`
-4. **Given** données FMP > 180 jours, **When** ranking final, **Then** ticker exclu du Top 10
+3. **Given** données FMP > 365 jours, **When** ticker dans Top 10, **Then** flag `⚠️ données potentiellement périmées`
+4. **Given** données FMP > 450 jours, **When** ranking final, **Then** ticker exclu du Top 10
 5. **Given** univers post-chalutier < 100 tickers, **When** scoring déclenché, **Then** scan annulé, warning log `universe_too_small`
 6. **Given** secteur < 3 tickers dans la shortlist scorée, **When** ranking intra-secteur, **Then** bascule automatique vers ranking cross-universe
 
@@ -328,7 +328,7 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 | Prix unitaire         | > 5.00 $                        | yfinance `currentPrice` | Éviter zones penny stock            |
 | Listing               | NYSE / NASDAQ / AMEX            | yfinance `exchange`     | Exclure OTC, marchés exotiques      |
 | Ancienneté données    | > 2 ans d'historique disponible | yfinance date min       | Track record minimum value          |
-| Données fondamentales | Disponibles et < 180 jours      | yfinance `financials`   | Données trop vieilles = non fiables |
+| Données fondamentales | Disponibles et < 450 jours      | FMP `income-statement` (IS annuel) | Données trop vieilles = non fiables (seuil annuel : FMP retourne des bilans annuels, pas trimestriels) |
 
 > **Note technique** : Le filtre volume se calcule comme `avg(volume_20j) × avg(close_20j)`. Ne pas utiliser le volume brut (actions) mais le volume en dollars.
 
@@ -783,13 +783,15 @@ Certains secteurs ont des structures financières incompatibles avec les métriq
 
 ```
 data_freshness_check():
-    Si dernières données fondamentales > 120 jours :
+    Si dernières données fondamentales > 365 jours :
         Ajouter flag "⚠️ Données fondamentales potentiellement périmées"
         Maintenir dans le ranking mais alerter l'utilisateur
 
-    Si dernières données > 180 jours :
+    Si dernières données > 450 jours :
         Exclure du ranking final
 ```
+
+> **Note** : FMP `income-statement?limit=3` retourne des bilans **annuels** (pas trimestriels). Le dernier bilan d'une entreprise à exercice non-décembrien (ex: MU=août, AMAT=octobre) peut dater de ~270 jours même si les données sont à jour. Seuils 365/450 jours calibrés pour cette réalité.
 
 ### 5.1b Sanity Check Gate (intégrité des prix)
 
@@ -1584,8 +1586,8 @@ Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de 
 | `VIX_PANIC_THRESHOLD`           | 35                | [30, 45]                                                          | §4.0         |
 | `VIX_WARNING_THRESHOLD`         | 25                | [20, 30]                                                          | §4.0         |
 | `MAX_TICKERS_PER_SECTOR`        | 3                 | [1, 10] — 10 = mode alpha pur (risque concentration)              | §5.3         |
-| `DATA_FRESHNESS_WARNING_DAYS`   | 120               | [60, 150]                                                         | §5.1         |
-| `DATA_FRESHNESS_EXCLUSION_DAYS` | 180               | [120, 365]                                                        | §5.1         |
+| `DATA_FRESHNESS_WARNING_DAYS`   | 365               | [270, 400] — calibré bilans annuels FMP (BF-028)                  | §5.1         |
+| `DATA_FRESHNESS_EXCLUSION_DAYS` | 450               | [365, 550] — idem, exercices non-décembriens (BF-028)             | §5.1         |
 | `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                     | §3.2         |
 | `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                        | §3bis.2.1    |
 | `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le hard limit 175 calls (BF-010) | §2         |
