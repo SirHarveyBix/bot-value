@@ -222,7 +222,7 @@ async def test_full_pipeline_panic_regime(tmp_path):
 
     stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
 
-    spy_prices = pd.Series([450.0] * 252, index=dates)
+    spy_prices = pd.Series(np.linspace(400.0, 450.0, 252), index=dates)  # série réaliste (std ≈ 14.7)
     vix_prices = pd.Series([40.0] * 252, index=dates)  # PANIC (VIX > 35)
     mock_indices = pd.DataFrame(
         {

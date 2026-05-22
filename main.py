@@ -71,6 +71,15 @@ async def run_scanner(force=False):
             current_spy = spy_valid.iloc[-1].item()
             current_vix = vix_valid.iloc[-1].item()
 
+            spy_std = float(spy_valid.std())
+            if spy_std < 1.0:
+                logger.error(
+                    f"SPY série plate suspecte (std={spy_std:.4f}, price={current_spy:.2f}) — "
+                    "yfinance a probablement retourné des données stale. Scan annulé."
+                )
+                await notify_vix_unavailable()
+                return
+
             regime = evaluate_market_regime(current_vix, current_spy, ema200)
             logger.info(
                 f"Market Gate: regime={regime.value} | SPY={current_spy:.2f} EMA200={ema200:.2f} VIX={current_vix:.1f}"

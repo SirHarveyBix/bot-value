@@ -1061,6 +1061,48 @@ def test_vix_all_zero_returns_empty():
     assert result.empty
 
 
+# ── BF-026 — détection série SPY plate (données yfinance stale) ───────────────
+
+
+def test_spy_flat_series_detected_by_std():
+    """SPY série plate (tous identiques) → std < 1.0 → doit déclencher l'annulation du scan."""
+    import pandas as pd
+
+    spy_flat = pd.Series([450.0] * 252)
+    assert float(spy_flat.std()) < 1.0
+
+
+def test_spy_realistic_series_not_flat():
+    """SPY série réaliste (linspace 400→450) → std ≥ 1.0 → pas d'annulation."""
+    import numpy as np
+    import pandas as pd
+
+    spy_real = pd.Series(np.linspace(400.0, 480.0, 252))
+    assert float(spy_real.std()) >= 1.0
+
+
+# ── BF-027 — send_message_safe log succès ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_message_safe_logs_success():
+    """send_message_safe : envoi OK → logger.info appelé avec 'envoyé'."""
+    from unittest.mock import AsyncMock, patch
+
+    from scanner.notifier import send_message_safe
+
+    mock_bot = AsyncMock()
+    mock_bot.send_message = AsyncMock(return_value=None)
+
+    with patch("scanner.notifier.logger") as mock_logger:
+        await send_message_safe(mock_bot, "123", "test message")
+
+    mock_bot.send_message.assert_called_once()
+    assert mock_logger.info.called
+    info_msg = mock_logger.info.call_args[0][0]
+    assert "envoyé" in info_msg
+
+
 # ── T053/T057 — is_eligible_etf ──────────────────────────────────────────────
 
 
