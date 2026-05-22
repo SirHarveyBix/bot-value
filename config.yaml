@@ -27,8 +27,8 @@ scanner:
   min_universe_size: 100
   telegram_max_chars: 4096
   min_tickers_intra_sector: 3
-  data_freshness_warning_days: 120
-  data_freshness_exclusion_days: 200
+  data_freshness_warning_days: 365
+  data_freshness_exclusion_days: 450
   earnings_window_days: 14
   exit_rank_threshold: 15
   exit_score_threshold: 70.0

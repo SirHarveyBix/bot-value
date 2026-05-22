@@ -1,5 +1,18 @@
+import sys
+
 import pytest
 from freezegun import freeze_time
+from loguru import logger
+
+
+@pytest.fixture(autouse=True, scope="session")
+def isolate_test_logs(tmp_path_factory):
+    """Redirige loguru vers /tmp pendant les tests — évite de polluer data/logs/ production."""
+    logger.remove()
+    tmp = tmp_path_factory.mktemp("logs")
+    logger.add(str(tmp / "test.log"), level="DEBUG")
+    logger.add(sys.stderr, level="WARNING", format="{level} | {name}:{function}:{line} - {message}")
+    yield
 
 
 @pytest.fixture(scope="session")
