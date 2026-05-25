@@ -14,7 +14,7 @@
 
 **Objectif** : Scaffolding projet + configuration + SQLite + scheduler vide fonctionnel
 
-- [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 175`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 97200`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 120`, `DATA_FRESHNESS_EXCLUSION_DAYS: 180`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
+- [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 175`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 97200`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 365`, `DATA_FRESHNESS_EXCLUSION_DAYS: 450`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
 - [x] T002 [P] Créer `.env.example` à la racine avec placeholders : `TELEGRAM_BOT_TOKEN=`, `TELEGRAM_CHAT_ID=`, `FMP_API_KEY=`
 - [x] T003 [P] Créer/vérifier `requirements.txt` avec dépendances épinglées : `yfinance>=0.2.40,<0.3.0`, `pandas>=2.1.0,<3.0.0`, `numpy>=1.26.0,<2.0.0`, `apscheduler>=4.0.0a5`, `pandas-market-calendars>=4.3.0`, `python-telegram-bot>=21.0,<22.0`, `httpx>=0.27.0,<0.28.0`, `PyYAML>=6.0.1,<7.0.0`, `python-dotenv>=1.0.0,<2.0.0`, `loguru>=0.7.2,<1.0.0`, `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`, `vcrpy`, `freezegun`, `supervisor>=4.2.0`
 - [x] T004 [P] Créer les packages Python vides : `scanner/__init__.py`, `scanner/scoring/__init__.py`
@@ -96,14 +96,14 @@
 
 **Objectif** : Filtres éligibilité complets, freshness, earnings calendar, MIN_UNIVERSE_SIZE robuste
 
-**Test indépendant** : Injecter tickers BVS ≤ 0 / ROE None / sector=None / données > 180j → vérifier exclusions + logs corrects
+**Test indépendant** : Injecter tickers BVS ≤ 0 / ROE None / sector=None / données > 450j → vérifier exclusions + logs corrects
 
 - [x] T041 [US3] Ajouter exclusion sector=None dans `scanner/universe.py` (ou `engine.py`) : log `sector_missing` avec ticker, exclure du pipeline Actions, maintenir dans univers pour runs suivants
-- [x] T042 [US3] Implémenter `data_freshness_check(ticker_data) -> tuple[bool, list[str]]` dans `scanner/filters.py` : calcule `days_since_report = (today - last_report_date).days`; > 120j → flag `⚠️ données potentiellement périmées`; > 180j → retourne `(False, ["données trop vieilles"])` (exclu ranking)
+- [x] T042 [US3] Implémenter `data_freshness_check(ticker_data) -> tuple[bool, list[str]]` dans `scanner/filters.py` : calcule `days_since_report = (today - last_report_date).days`; > 365j → flag `⚠️ données potentiellement périmées`; > 450j → retourne `(False, ["données trop vieilles"])` (exclu ranking)
 - [x] T043 [US3] Implémenter `earnings_calendar_check(ticker, calendar_data) -> str|None` dans `scanner/filters.py` : date earnings dans `[today, today + 14j]` → retourne `📅 Earnings à venir : {date}` (tag informatif, non bloquant)
 - [x] T044 [US3] Implémenter concentration sectorielle dans `scanner/filters.py` : `apply_sector_concentration(ranked_df, max_per_sector=3) -> DataFrame` → si secteur dépasse plafond, remplace overflow par meilleurs tickers restants hors-secteur
 - [x] T045 [US3] Câbler `filters.py` dans pipeline `engine.py` / `main.py` : freshness check avant ranking final, earnings tag ajouté aux `flags` JSON du signal, concentration sectorielle appliquée sur Top 10 avant envoi
-- [x] T046 [P] [US3] Tests `tests/test_logic.py` : fixtures données manquantes → BVS ≤ 0 exclu avec reason, ROE None exclu "indisponible", sector=None exclu `sector_missing`, données > 180j exclues ranking
+- [x] T046 [P] [US3] Tests `tests/test_logic.py` : fixtures données manquantes → BVS ≤ 0 exclu avec reason, ROE None exclu "indisponible", sector=None exclu `sector_missing`, données > 450j exclues ranking
 
 **Checkpoint** : FR-003 respecté (yfinance non utilisé pour ROE/marges). US3 acceptance criteria 1–6 passent tous.
 
@@ -327,11 +327,17 @@ T033 engine.py       ← pipeline scoring (dépend T026, T031, T032)
 - BF-024 — `filters.py` : `earnings_calendar_check` appelait `yf.Ticker(symbol).calendar` de manière bloquante dans un contexte async → freeze Event Loop. Rendu `async` via `asyncio.to_thread`.
 - BF-025 — `universe.py` : constante `TTL_FUNDAMENTALS = 24 * 3600` (24h) en conflit silencieux avec `cache_ttl_fundamentals: 97200` (27h) du `config.yaml`. Constante locale supprimée, config utilisée directement.
 
+**Bugs corrigés post-incident production (scan 2026-05-22 — 0 signaux, 0 notification) :**
+
+- BF-026 — `main.py` : SPY série plate suspecte non détectée (std < 1.0) — yfinance retournait données stale lors d'un scan non planifié à minuit. Ajout guard `spy_std = float(spy_valid.std()); if spy_std < 1.0 → notify_vix_unavailable() + return`.
+- BF-027 — `scanner/notifier.py` : `send_message_safe` ne loggait pas le succès Telegram → impossible de diagnostiquer si le message avait bien été envoyé. Ajout `logger.info("Telegram message envoyé")` après chaque envoi réussi (initial et retry).
+- BF-028 — `config.yaml` : `data_freshness_warning_days: 120 → 365`, `data_freshness_exclusion_days: 180 → 450`. FMP `income-statement?limit=3` retourne des bilans annuels (pas trimestriels) — les entreprises à exercice non-décembrien (MU=août, AMAT=octobre) avaient des IS datant de ~270j, dépassant le seuil 180j et exclus à tort. Root cause confirmée pour le 0 signal du matin.
+
 **Tâches techniques acceptées non-corrigées (contraintes plan gratuit FMP) :**
 
 - AT-001 — `universe.py` utilise `yf.Ticker().info` pour `marketCap`/`price`/`volume` sur ~600 tickers (eligibilité Chalutier) : FMP incompatible avec ce volume (~600 appels = budget dépassé). Tradeoff accepté explicitement.
 - AT-002 — `surprise_pct` toujours `None` sur plan gratuit (endpoint 404) : non bloquant pour scoring (poids rédistribué). Documenté dans logs.
-- AT-003 — `most_recent_quarter_ts` dérivé de la date IS annuelle (pas trimestrielle) : endpoint earnings-surprises absent. Fraîcheur calculée sur date bilan annuel (~365j). Fenêtre `data_freshness_exclusion_days` ajustée en conséquence.
+- AT-003 — `most_recent_quarter_ts` dérivé de la date IS annuelle (pas trimestrielle) : endpoint earnings-surprises absent. Fraîcheur calculée sur date bilan annuel (~365j). Fenêtre `data_freshness_exclusion_days` = 450j, `data_freshness_warning_days` = 365j (BF-028). Tickers à exercice non-décembrien (MU=août ~270j, AMAT=oct ~212j) correctement inclus.
 
 - **Tâches [P]** (parallélisables) : 42
 - **MVP scope** : T001–T040 (Phases 1–4) = 40 tâches — ✅ complet

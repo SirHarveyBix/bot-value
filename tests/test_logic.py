@@ -581,17 +581,17 @@ def test_analyst_revision_computation():
 
 @freeze_time("2026-05-19")
 def test_data_freshness_stale():
-    """mostRecentQuarter vieux de 200j → is_fresh=False."""
-    stale_ts = (datetime(2026, 5, 19) - timedelta(days=200)).timestamp()
+    """mostRecentQuarter vieux de 451j (bilan annuel vraiment stale) → is_fresh=False."""
+    stale_ts = (datetime(2026, 5, 19) - timedelta(days=451)).timestamp()
     is_fresh, _, reason = data_freshness_check({"mostRecentQuarter": stale_ts})
     assert not is_fresh
-    assert "200" in reason
+    assert "451" in reason
 
 
 @freeze_time("2026-05-19")
 def test_data_freshness_warning():
-    """mostRecentQuarter vieux de 150j → is_fresh=True, has_warning=True."""
-    warn_ts = (datetime(2026, 5, 19) - timedelta(days=150)).timestamp()
+    """mostRecentQuarter vieux de 400j (bilan annuel > 1 an) → is_fresh=True, has_warning=True."""
+    warn_ts = (datetime(2026, 5, 19) - timedelta(days=400)).timestamp()
     is_fresh, has_warning, _ = data_freshness_check({"mostRecentQuarter": warn_ts})
     assert is_fresh
     assert has_warning
@@ -1320,12 +1320,12 @@ def test_truncate_message_html_safe_nested_tags():
 
 @pytest.mark.asyncio
 async def test_filter_post_scoring_stale_data_excluded():
-    """Ticker avec données vieilles de 201j → exclu du top 10 (data_freshness_check False)."""
+    """Ticker avec données vieilles de 451j (bilan annuel > 15 mois) → exclu du top 10."""
     import time as _time
 
     from scanner.filters import filter_post_scoring
 
-    stale_ts = _time.time() - 201 * 86400
+    stale_ts = _time.time() - 451 * 86400
     fresh_ts = _time.time() - 10 * 86400
 
     rows = [
