@@ -1,8 +1,8 @@
 # Implementation Plan: ValueMomentum Scanner
 
-**Branch**: `main` | **Date**: 2026-05-21 | **Spec**: `specs/Spec_ValueMomentum_Scanner.md`
+**Branch**: `main` | **Date**: 2026-05-21 | **Spec**: `specs/spec.md`
 
-**Input**: `specs/Spec_ValueMomentum_Scanner.md` + `specs/besoin.md` + `.specify/memory/constitution.md`
+**Input**: `specs/spec.md` + `specs/besoin.md` + `.specify/memory/constitution.md`
 
 ## Summary
 
@@ -50,7 +50,7 @@ _GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 specs/
 ├── plan.md                      # Ce fichier
 ├── besoin.md                    # Expression de besoin du trader
-└── Spec_ValueMomentum_Scanner.md # Spec technique complète (source de vérité)
+└── spec.md # Spec technique complète (source de vérité)
 ```
 
 ### Source Code (repository root)
@@ -111,9 +111,9 @@ valuemomentum-scanner/
 
 ### Phase 0 — Research (TERMINÉE)
 
-Décisions architecturales documentées dans `Spec_ValueMomentum_Scanner.md` §Préambule (Actes 1–4). Rationale trader validé : Jegadeesh & Titman momentum 3–6 mois, séparation yfinance/FMP, scoring percentile, Market Gate VIX.
+Décisions architecturales documentées dans `spec.md` §Préambule (Actes 1–4). Rationale trader validé : Jegadeesh & Titman momentum 3–6 mois, séparation yfinance/FMP, scoring percentile, Market Gate VIX.
 
-**Outputs** : `specs/besoin.md`, `specs/Spec_ValueMomentum_Scanner.md`
+**Outputs** : `specs/besoin.md`, `specs/spec.md`
 
 ---
 

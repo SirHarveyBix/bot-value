@@ -13,7 +13,7 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 5. [Test rapide](#test-rapide)
 6. [Tests unitaires & Qualité du code](#tests-unitaires--qualité-du-code)
 7. [Mode production (24/7)](#mode-production-247)
-8. [Démarrage automatique au boot](#démarrage-automatique-au-boot-mac)
+8. [Déploiement Mac Mini (production complète)](#déploiement-mac-mini-production-complète)
 9. [Gestion de l'univers de tickers](#gestion-de-lunivers-de-tickers)
 10. [Dashboard Web](#dashboard-web)
 11. [Logs](#logs)
@@ -219,11 +219,11 @@ Le scanner se déclenche automatiquement chaque jour ouvré à **09h35 ET** (heu
 
 ---
 
-## Déploiement Mac Mini
+## Déploiement Mac Mini (production complète)
 
-### Prévenir la mise en veille
+Séquence complète pour un Mac Mini en production 24/7.
 
-Sur Mac Mini en production, désactivez tous les modes de veille pour éviter toute interruption :
+### Étape 1 — Prévenir la mise en veille
 
 ```bash
 sudo pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0
@@ -236,65 +236,52 @@ sudo pmset -a sleep 0 disksleep 0 hibernatemode 0 powernap 0
 | `hibernatemode` | 0      | Pas d'hibernation                   |
 | `powernap`      | 0      | Désactive les tâches en veille      |
 
-### Installation complète sur Mac Mini
+### Étape 2 — Installation
 
 ```bash
-# 1. Cloner et configurer
 git clone https://github.com/SirHarveyBix/bot-value.git
 cd bot-value
 python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+./venv/bin/pip install -r requirements.txt
 cp .env.example .env && nano .env   # Renseigner les 3 clés
-
-# 2. Lancer supervisord (process manager)
-supervisord -c supervisord.conf
-supervisorctl -c supervisord.conf status   # Doit afficher scanner + web RUNNING
 ```
 
----
-
-## Démarrage automatique au boot (Mac)
-
-Pour que le scanner redémarre automatiquement au démarrage du Mac Mini, exécutez ce bloc **depuis le dossier du projet** :
+### Étape 3 — Peupler l'univers de tickers (obligatoire au premier démarrage)
 
 ```bash
-PROJECT_DIR="$(pwd)"
-PLIST=~/Library/LaunchAgents/com.valuemomentum.plist
-
-cat > "$PLIST" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.valuemomentum</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${PROJECT_DIR}/venv/bin/supervisord</string>
-        <string>-c</string>
-        <string>${PROJECT_DIR}/supervisord.conf</string>
-        <string>-n</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>WorkingDirectory</key>
-    <string>${PROJECT_DIR}</string>
-    <key>StandardOutPath</key>
-    <string>${PROJECT_DIR}/data/logs/launchd_stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>${PROJECT_DIR}/data/logs/launchd_stderr.log</string>
-</dict>
-</plist>
-EOF
-
-launchctl load "$PLIST"
-echo "Service installé. Le scanner démarrera à chaque boot."
+PYTHONPATH=. ./venv/bin/python scanner/refresh_universe.py sp500
+PYTHONPATH=. ./venv/bin/python scanner/refresh_universe.py nasdaq100
 ```
 
-Pour désinstaller :
+### Étape 4 — Test rapide (vérifier la config avant prod)
+
+```bash
+./venv/bin/python main.py --now --force
+# Vous devez recevoir un message Telegram dans les 10–15 minutes
+```
+
+### Étape 5 — Démarrage automatique au boot (LaunchAgent)
+
+```bash
+bash scripts/install-launchd.sh
+```
+
+Vérifier que le service est actif :
+
+```bash
+launchctl list | grep valuemomentum
+# Un PID non-zéro = service en cours d'exécution
+```
+
+Vérifier supervisord :
+
+```bash
+./venv/bin/supervisorctl -c supervisord.conf status
+# scanner    RUNNING   pid XXXXX, uptime 0:00:XX
+# web        RUNNING   pid XXXXX, uptime 0:00:XX
+```
+
+### Désinstaller le LaunchAgent
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.valuemomentum.plist

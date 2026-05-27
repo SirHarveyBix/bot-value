@@ -65,14 +65,18 @@ Tout changement majeur doit être validé par :
 
 ```bash
 # Lancer les tests
-venv/bin/pytest tests/ -v
+./venv/bin/pytest tests/ -v
 
 # Scan immédiat (test, marché fermé OK)
-source venv/bin/activate && python3 main.py --now --force
+./venv/bin/python main.py --now --force
 
 # Statut du process manager
-source venv/bin/activate && supervisorctl -c supervisord.conf status
+./venv/bin/supervisorctl -c supervisord.conf status
 
 # Logs en temps réel
 tail -f data/logs/scanner_$(date +%Y-%m-%d).log
+
+# Installer le LaunchAgent (démarrage auto au boot)
+bash scripts/install-launchd.sh
+launchctl list | grep valuemomentum   # PID non-zéro = actif
 ```
