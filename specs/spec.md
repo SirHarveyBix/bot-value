@@ -191,9 +191,10 @@ ETFs scorés sur momentum pur (sector rotation), pipeline et section Telegram s�
 
 - **FR-001** : Le scan DOIT s'exécuter uniquement les jours de bourse NYSE (via `pandas_market_calendars`)
 - **FR-002** : Le Market Gate DOIT évaluer VIX et SPY/EMA200 en priorité absolue avant tout scoring
-- **FR-003** : `yfinance` NE DOIT PAS être utilisé pour ROE, marges, FCF, ou toute donnée bilancielle
-- **FR-004** : FMP DOIT être utilisé pour les 5 endpoints de la shortlist (30 tickers, SHORTLIST_SIZE non négociable, 150 calls nominaux + 25 retry margin = 175 hard limit) — `earnings-surprises` et `analyst-estimates` supprimés (indisponibles plan gratuit, BF-010)
-- **FR-005** : Si FMP indisponible → Telegram `⚠️ Sniper FMP indisponible` + scan arrêté — aucun fallback yfinance fondamentaux
+- **FR-003** : `yfinance` NE DOIT PAS être utilisé pour ROE, marges, FCF, ou toute donnée bilancielle — **exception** : si FMP IS/BS retourne `[]` (plan gap, pas une panne), yfinance `get_income_stmt(pretty=False)` + `get_balance_sheet(pretty=False)` (annuel) sont autorisés **uniquement** pour calculer `roe_3y`. `yf.info["returnOnEquity"]` (TTM) reste interdit.
+- **FR-004** : FMP DOIT être utilisé pour les 5 endpoints de la shortlist (30 tickers, SHORTLIST_SIZE non négociable, 150 calls nominaux + 25 retry margin = 175 hard limit) — `earnings-surprises` et `analyst-estimates` supprimés (indisponibles plan gratuit, BF-010). Si IS/BS retourne `[]`, fallback yfinance roe_3y autorisé (FR-003 exception).
+- **FR-004b** : Avant le Sniper, appliquer `SHORTLIST_SECTOR_CAP = 5` tickers max par secteur sur la liste momentum-triée. Implémentation dans `filters.py::cap_sector_shortlist()`. Paramètre dans `config.yaml`.
+- **FR-005** : Si FMP indisponible (clé absente ou 5xx persistant) → Telegram `⚠️ Sniper FMP indisponible` + scan arrêté. Distinct du plan gap (FR-004) : indisponibilité = circuit-breaker, plan gap = fallback autorisé.
 - **FR-006** : Scoring Actions = 3 piliers (Qualité 35%, Valorisation 30%, Momentum 35%) avec percentile ranking
 - **FR-007** : Scoring Momentum = 5 critères nominaux. `analyst-estimates` (FMP) indisponible plan gratuit — critère score 0 pour tous les tickers (impact symétrique, ranking relatif préservé). Log `WARNING: analyst-estimates indisponible` requis.
 - **FR-008** : Earnings Surprise DOIT avoir décroissance temporelle linéaire sur 90 jours post-résultats. `earnings-surprises` (FMP) indisponible plan gratuit — critère score 0 pour tous les tickers (impact symétrique). Décroissance applicable si endpoint redevient disponible (upgrade plan FMP).
@@ -321,13 +322,13 @@ L'univers est géré via un fichier JSON central (`tickers_universe.json`). Cont
 
 Les filtres suivants éliminent les instruments non tradables avant toute analyse :
 
-| Filtre                | Seuil                           | Source                  | Raison                              |
-| --------------------- | ------------------------------- | ----------------------- | ----------------------------------- |
-| Market Cap minimum    | > 2 000 M$                      | yfinance `marketCap`    | Éviter les micro-caps volatiles     |
-| Volume moyen 20j      | > 5 000 000 $                   | yfinance OHLCV          | Exécutable institutionnel           |
-| Prix unitaire         | > 5.00 $                        | yfinance `currentPrice` | Éviter zones penny stock            |
-| Listing               | NYSE / NASDAQ / AMEX            | yfinance `exchange`     | Exclure OTC, marchés exotiques      |
-| Ancienneté données    | > 2 ans d'historique disponible | yfinance date min       | Track record minimum value          |
+| Filtre                | Seuil                           | Source                             | Raison                                                                                                 |
+| --------------------- | ------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Market Cap minimum    | > 2 000 M$                      | yfinance `marketCap`               | Éviter les micro-caps volatiles                                                                        |
+| Volume moyen 20j      | > 5 000 000 $                   | yfinance OHLCV                     | Exécutable institutionnel                                                                              |
+| Prix unitaire         | > 5.00 $                        | yfinance `currentPrice`            | Éviter zones penny stock                                                                               |
+| Listing               | NYSE / NASDAQ / AMEX            | yfinance `exchange`                | Exclure OTC, marchés exotiques                                                                         |
+| Ancienneté données    | > 2 ans d'historique disponible | yfinance date min                  | Track record minimum value                                                                             |
 | Données fondamentales | Disponibles et < 450 jours      | FMP `income-statement` (IS annuel) | Données trop vieilles = non fiables (seuil annuel : FMP retourne des bilans annuels, pas trimestriels) |
 
 > **Note technique** : Le filtre volume se calcule comme `avg(volume_20j) × avg(close_20j)`. Ne pas utiliser le volume brut (actions) mais le volume en dollars.
@@ -401,7 +402,7 @@ Le système applique un **Rate Limiting Séquentiel** strict pour éviter le ban
 1. **Délai asynchrone jittered** : Entre chaque appel `.info` (yfinance) ou API (FMP), un délai aléatoire compris entre **0.8s et 1.5s** (`await asyncio.sleep(random.uniform(0.8, 1.5))`) est observé pour simuler un comportement humain et éviter le bannissement IP.
 2. **INTER_REQUEST_DELAY** : Fixé à 1.0s par défaut pour garantir la pérennité de l'accès Yahoo Finance.
 3. **FMP_MAX_RETRIES** : **2 tentatives maximum** avec backoff exponentiel asynchrone (cf. §2 budget FMP — 3 retries dépasserait le hard limit 175 calls).
-4. **Aucun fallback FMP → yfinance** : Si FMP échoue après 2 retries pour un ticker, le ticker est ignoré (skip + flag dans les logs). La Règle d'Or est absolue — voir §16 contrainte 1.
+4. **Fallback limité FMP → yfinance** : Si FMP échoue après 2 retries (5xx), le ticker est ignoré. Si FMP retourne IS/BS vide `[]` (plan gap), fallback yfinance autorisé pour `roe_3y` uniquement (FR-003). La distinction indisponibilité/plan-gap est critique — voir §16 contrainte 1.
 
 ### 2.3 Validation des données reçues
 
@@ -624,12 +625,12 @@ def winsorize(value: float, low: float, high: float) -> float:
 
 #### PILIER 3 : MOMENTUM (pondération 35%)
 
-| Métrique                            | Calcul                                            | Source                   | Ranking        |
-| ----------------------------------- | ------------------------------------------------- | ------------------------ | -------------- |
-| Momentum ajusté volatilité _(v1.1)_ | `Return_6M / σ_daily_6M` — voir note ci-dessous   | yfinance                 | Cross-universe |
-| Performance 6 mois _(v1.0)_         | `(Prix J0 - Prix J-126) / Prix J-126`             | yfinance                 | Cross-universe |
-| Surperformance sectorielle 6M       | Perf 6M ticker - Perf 6M ETF sectoriel SPDR       | yfinance                 | Intra-secteur  |
-| Performance 3 mois                  | `(Prix J0 - Prix J-63) / Prix J-63`               | yfinance                 | Cross-universe |
+| Métrique                            | Calcul                                            | Source                                                                     | Ranking        |
+| ----------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------- | -------------- |
+| Momentum ajusté volatilité _(v1.1)_ | `Return_6M / σ_daily_6M` — voir note ci-dessous   | yfinance                                                                   | Cross-universe |
+| Performance 6 mois _(v1.0)_         | `(Prix J0 - Prix J-126) / Prix J-126`             | yfinance                                                                   | Cross-universe |
+| Surperformance sectorielle 6M       | Perf 6M ticker - Perf 6M ETF sectoriel SPDR       | yfinance                                                                   | Intra-secteur  |
+| Performance 3 mois                  | `(Prix J0 - Prix J-63) / Prix J-63`               | yfinance                                                                   | Cross-universe |
 | Surprise Earnings % (Sniper)        | (BPA Publié - BPA Attendu) / BPA Attendu          | FMP `earnings-surprises` _(indisponible plan gratuit — BF-010, score = 0)_ | Cross-universe |
 | Révision estimations analystes 3M   | % de variation médiane des EPS forward sur 3 mois | FMP `analyst-estimates` _(indisponible plan gratuit — BF-010, score = 0)_  | Cross-universe |
 
@@ -1562,7 +1563,7 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 
 ## 16. Contraintes et hypothèses de développement
 
-1. **Hybride yfinance / FMP — Séparation stricte des responsabilités** : yfinance est utilisé **exclusivement** pour les données prix/volume (OHLCV, momentum). FMP est utilisé **exclusivement** pour les données bilancielles (ROE, marges, dette/EBITDA, FCF, P/E forward, surprise earnings, révisions analystes). **Il n'existe aucun fallback de FMP vers yfinance pour les fondamentaux** — cf. Règle d'Or du besoin. Si FMP est indisponible (clé absente, erreur 5xx persistante après 2 retries) : envoyer le message Telegram `⚠️ Sniper FMP indisponible` et arrêter le scan. Un scan sans données FMP est un scan sans pilier Qualité — il ne doit pas émettre de signaux.
+1. **Hybride yfinance / FMP — Séparation des responsabilités** : yfinance est utilisé pour les données prix/volume (OHLCV, momentum). FMP est utilisé pour les données bilancielles (ROE, marges, dette/EBITDA, FCF, P/E forward, surprise earnings, révisions analystes). **Exception documentée** : si FMP IS/BS retourne `[]` (plan gratuit — plan gap, pas une panne), yfinance `get_income_stmt(pretty=False)` + `get_balance_sheet(pretty=False)` sont autorisés pour le seul calcul de `roe_3y`. `yf.info["returnOnEquity"]` (TTM) reste interdit. Si FMP est indisponible (clé absente, erreur 5xx persistante après 2 retries) : envoyer le message Telegram `⚠️ Sniper FMP indisponible` et arrêter le scan — la distinction indisponibilité vs plan-gap est non-négociable. [2026-06-02 — Amendment v1.2.0 : plan gap → fallback yfinance roe_3y autorisé]
 
 2. **Le Mac Mini est en local** — pas de cloud. Le stockage est 100% **SQLite** pour l'historique, avec des fichiers JSON pour l'univers et le cache.
 
@@ -1580,25 +1581,26 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 
 Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de référence, plages valides et section source :
 
-| Constante                       | Valeur par défaut | Plage valide                                                      | Section spec |
-| ------------------------------- | ----------------- | ----------------------------------------------------------------- | ------------ |
-| `SHORTLIST_SIZE`                | 30                | [20, 30] — **ne pas dépasser 30** sans audit budget FMP           | §2           |
-| `VIX_PANIC_THRESHOLD`           | 35                | [30, 45]                                                          | §4.0         |
-| `VIX_WARNING_THRESHOLD`         | 25                | [20, 30]                                                          | §4.0         |
-| `MAX_TICKERS_PER_SECTOR`        | 3                 | [1, 10] — 10 = mode alpha pur (risque concentration)              | §5.3         |
-| `DATA_FRESHNESS_WARNING_DAYS`   | 365               | [270, 400] — calibré bilans annuels FMP (BF-028)                  | §5.1         |
-| `DATA_FRESHNESS_EXCLUSION_DAYS` | 450               | [365, 550] — idem, exercices non-décembriens (BF-028)             | §5.1         |
-| `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                     | §3.2         |
-| `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                        | §3bis.2.1    |
-| `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le hard limit 175 calls (BF-010) | §2         |
-| `FMP_CALL_BUDGET_HARD_LIMIT`    | 175               | 30 × 5 = 150 nominal + 25 retry margin = 175 hard limit (BF-010)  | §2           |
-| `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429          | §3bis.2.1    |
-| `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                          | §3bis.2.1    |
-| `CACHE_TTL_FUNDAMENTALS`        | 97200s (27h)      | [86400, 172800] — **min 27h** pour éviter race condition 09h35    | §3bis.2.4    |
-| `CACHE_TTL_PRICE_HISTORY`       | 14400s (4h)       | [3600, 86400]                                                     | §3bis.2.4    |
-| `EARNINGS_WINDOW_DAYS`          | 14                | [7, 21]                                                           | §5.2         |
-| `MIN_UNIVERSE_SIZE`             | 100               | [50, 200] — en dessous : percentile ranking invalide, scan annulé | §4           |
-| `TELEGRAM_MAX_CHARS`            | 4096              | fixe (limite API)                                                 | §6.6         |
+| Constante                       | Valeur par défaut | Plage valide                                                        | Section spec |
+| ------------------------------- | ----------------- | ------------------------------------------------------------------- | ------------ |
+| `SHORTLIST_SIZE`                | 30                | [20, 30] — **ne pas dépasser 30** sans audit budget FMP             | §2           |
+| `SHORTLIST_SECTOR_CAP`          | 5                 | [3, 10] — max tickers/secteur dans la shortlist momentum (Stage 1b) | §3bis        |
+| `VIX_PANIC_THRESHOLD`           | 35                | [30, 45]                                                            | §4.0         |
+| `VIX_WARNING_THRESHOLD`         | 25                | [20, 30]                                                            | §4.0         |
+| `MAX_TICKERS_PER_SECTOR`        | 3                 | [1, 10] — 10 = mode alpha pur (risque concentration)                | §5.3         |
+| `DATA_FRESHNESS_WARNING_DAYS`   | 365               | [270, 400] — calibré bilans annuels FMP (BF-028)                    | §5.1         |
+| `DATA_FRESHNESS_EXCLUSION_DAYS` | 450               | [365, 550] — idem, exercices non-décembriens (BF-028)               | §5.1         |
+| `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                       | §3.2         |
+| `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                          | §3bis.2.1    |
+| `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le hard limit 175 calls (BF-010) | §2           |
+| `FMP_CALL_BUDGET_HARD_LIMIT`    | 175               | 30 × 5 = 150 nominal + 25 retry margin = 175 hard limit (BF-010)    | §2           |
+| `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429            | §3bis.2.1    |
+| `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                            | §3bis.2.1    |
+| `CACHE_TTL_FUNDAMENTALS`        | 97200s (27h)      | [86400, 172800] — **min 27h** pour éviter race condition 09h35      | §3bis.2.4    |
+| `CACHE_TTL_PRICE_HISTORY`       | 14400s (4h)       | [3600, 86400]                                                       | §3bis.2.4    |
+| `EARNINGS_WINDOW_DAYS`          | 14                | [7, 21]                                                             | §5.2         |
+| `MIN_UNIVERSE_SIZE`             | 100               | [50, 200] — en dessous : percentile ranking invalide, scan annulé   | §4           |
+| `TELEGRAM_MAX_CHARS`            | 4096              | fixe (limite API)                                                   | §6.6         |
 
 > **Règle de modification** : Toute modification d'une constante doit être accompagnée d'une note datée dans ce tableau (`[YYYY-MM-DD] Modifié X → Y — raison : ...`). La spec et le code doivent rester synchrones.
 

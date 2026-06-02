@@ -191,6 +191,40 @@ async def fetch_prices_batch(tickers, period="1y"):
     return pd.concat(all_frames, axis=1) if len(all_frames) > 1 else all_frames[0]
 
 
+def _roe_from_yfinance(symbol: str) -> float | None:
+    """Fallback roe_3y depuis yfinance IS/BS annuels quand FMP IS/BS retourne [].
+
+    Appelé via asyncio.to_thread (yfinance est synchrone).
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        is_df = ticker.get_income_stmt(pretty=False, freq="yearly")
+        bs_df = ticker.get_balance_sheet(pretty=False, freq="yearly")
+    except Exception:
+        return None
+
+    if is_df is None or is_df.empty or bs_df is None or bs_df.empty:
+        return None
+
+    ni_key = next((k for k in ["NetIncome", "NetIncomeCommonStockholders"] if k in is_df.index), None)
+    eq_key = next((k for k in ["CommonStockEquity", "StockholdersEquity"] if k in bs_df.index), None)
+    if ni_key is None or eq_key is None:
+        return None
+
+    common_dates = sorted(set(is_df.columns) & set(bs_df.columns), reverse=True)[:3]
+    roes = []
+    for date in common_dates:
+        try:
+            ni = float(is_df.loc[ni_key, date])
+            eq = float(bs_df.loc[eq_key, date])
+        except (TypeError, ValueError):
+            continue
+        if not pd.isna(ni) and not pd.isna(eq) and eq > 0:
+            roes.append(ni / eq)
+
+    return sum(roes) / len(roes) if roes else None
+
+
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
@@ -285,6 +319,13 @@ async def fetch_fmp_data(client, symbol):
                 roe_3y = sum(roes) / len(roes)
         else:
             logger.debug(f"FMP IS/BS vide ou non-liste pour {symbol}")
+
+        # FMP plan gap : IS/BS vide → fallback yfinance IS/BS annuels (pas TTM)
+        if roe_3y is None:
+            roe_yf = await asyncio.to_thread(_roe_from_yfinance, symbol)
+            if roe_yf is not None:
+                logger.info(f"ROE 3y fallback yfinance pour {symbol}: {roe_yf:.2%}")
+                roe_3y = roe_yf
 
         # netDebt, ebitda, totalDebt depuis IS/BS (absents de key-metrics-ttm stable)
         net_debt = bs_data[0].get("netDebt") if bs_list and len(bs_data) > 0 else None

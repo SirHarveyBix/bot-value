@@ -1454,6 +1454,92 @@ def test_roe_ttm_fallback_allows_ticker():
     assert passed, f"Doit passer avec ROE TTM fallback: {reason}"
 
 
+# ── ROE yfinance fallback (_roe_from_yfinance) ───────────────────────────────
+
+
+def test_roe_from_yfinance_returns_none_on_empty_df():
+    """_roe_from_yfinance retourne None si get_income_stmt/get_balance_sheet vides."""
+    from unittest.mock import MagicMock, patch
+
+    import pandas as pd
+
+    from scanner.fetcher import _roe_from_yfinance
+
+    empty_df = pd.DataFrame()
+    mock_ticker = MagicMock()
+    mock_ticker.get_income_stmt.return_value = empty_df
+    mock_ticker.get_balance_sheet.return_value = empty_df
+
+    with patch("scanner.fetcher.yf.Ticker", return_value=mock_ticker):
+        result = _roe_from_yfinance("FAKE")
+
+    assert result is None
+
+
+def test_roe_from_yfinance_calculates_correctly():
+    """_roe_from_yfinance calcule roe_3y = mean(NI/Equity) sur 3 ans."""
+    from unittest.mock import MagicMock, patch
+
+    import pandas as pd
+
+    from scanner.fetcher import _roe_from_yfinance
+
+    dates = pd.to_datetime(["2024-12-31", "2023-12-31", "2022-12-31"])
+    is_df = pd.DataFrame({"NetIncome": [100.0, 80.0, 60.0]}, index=dates).T
+    is_df.index = ["NetIncome"]
+    bs_df = pd.DataFrame({"CommonStockEquity": [500.0, 400.0, 300.0]}, index=dates).T
+    bs_df.index = ["CommonStockEquity"]
+
+    mock_ticker = MagicMock()
+    mock_ticker.get_income_stmt.return_value = is_df
+    mock_ticker.get_balance_sheet.return_value = bs_df
+
+    with patch("scanner.fetcher.yf.Ticker", return_value=mock_ticker):
+        result = _roe_from_yfinance("FAKE")
+
+    # Expected: mean(100/500, 80/400, 60/300) = mean(0.20, 0.20, 0.20) = 0.20
+    assert result is not None
+    assert abs(result - 0.20) < 1e-9
+
+
+# ── cap_sector_shortlist ─────────────────────────────────────────────────────
+
+
+def test_cap_sector_shortlist_limits_per_sector():
+    """cap_sector_shortlist cap à N tickers par secteur."""
+    from unittest.mock import patch
+
+    import pandas as pd
+
+    from scanner.filters import cap_sector_shortlist
+
+    data = [
+        ("NVDA", "Technology"),
+        ("AMD", "Technology"),
+        ("INTC", "Technology"),
+        ("MU", "Technology"),
+        ("QCOM", "Technology"),
+        ("LRCX", "Technology"),
+        ("JPM", "Financials"),
+        ("BAC", "Financials"),
+        ("GS", "Financials"),
+    ]
+    df = pd.DataFrame([{"symbol": s, "m_score": 100 - i} for i, (s, _) in enumerate(data)])
+    sector_map = {s: sec for s, sec in data}
+
+    def mock_cache_get(category, key, ttl):
+        return {"sector": sector_map.get(key)} if key in sector_map else None
+
+    with patch("scanner.filters.cache.get", side_effect=mock_cache_get):
+        result = cap_sector_shortlist(df, cap=3)
+
+    tech = [s for s in result if sector_map.get(s) == "Technology"]
+    fin = [s for s in result if sector_map.get(s) == "Financials"]
+    assert len(tech) == 3, f"Tech capped at 3, got {len(tech)}"
+    assert len(fin) == 3, f"Financials capped at 3, got {len(fin)}"
+    assert len(result) == 6
+
+
 # ── BF-008 : send_message_safe ne crash pas sur erreur Telegram ──────────────
 
 

@@ -4,7 +4,34 @@ from datetime import datetime
 import pandas as pd
 import yfinance as yf
 
+from scanner.cache import cache
 from scanner.config import CONFIG, logger
+
+
+def cap_sector_shortlist(momentum_df: pd.DataFrame, cap: int) -> list[str]:
+    """Limite à cap tickers/secteur dans la shortlist momentum-triée (Stage 1b).
+
+    Lit le secteur depuis le cache fundamentals (peuplé par build_eligible_universe).
+    Garantit la diversité sectorielle avant l'appel FMP.
+    """
+    ttl = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)
+    shortlist_size = CONFIG["scanner"]["shortlist_size"]
+    sector_counts: dict[str, int] = {}
+    result: list[str] = []
+
+    for _, row in momentum_df.iterrows():
+        symbol = row["symbol"]
+        info = cache.get("fundamentals", symbol, ttl) or {}
+        sector = info.get("sector") or "Unknown"
+
+        if sector_counts.get(sector, 0) < cap:
+            result.append(symbol)
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+
+        if len(result) >= shortlist_size:
+            break
+
+    return result
 
 
 async def filter_post_scoring(df, all_data, exclusions_out: list | None = None):

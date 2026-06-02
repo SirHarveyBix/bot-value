@@ -11,7 +11,7 @@ from pytz import timezone
 import scanner.fetcher as _fetcher
 from scanner.config import CONFIG, logger
 from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
-from scanner.filters import check_batch_data_ratio, check_data_ratio, filter_post_scoring
+from scanner.filters import cap_sector_shortlist, check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import notify, notify_exclusions, notify_panic, notify_vix_unavailable, notify_yfinance_ban
 from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
@@ -123,7 +123,7 @@ async def run_scanner(force=False):
         # 4. Premier Screening : Momentum uniquement
         momentum_ranked_df = momentum_screening_pipeline(price_data, eligible_stocks)
         # T004: Bug 3 fix — shortlist_size depuis config
-        shortlist_stocks = momentum_ranked_df.head(CONFIG["scanner"]["shortlist_size"])["symbol"].tolist()
+        shortlist_stocks = cap_sector_shortlist(momentum_ranked_df, CONFIG["scanner"].get("shortlist_sector_cap", 5))
 
         logger.info(f"Shortlist de {len(shortlist_stocks)} tickers sélectionnés pour analyse approfondie.")
 

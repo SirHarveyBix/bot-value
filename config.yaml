@@ -16,6 +16,7 @@ scanner:
   fmp_api_key: ${FMP_API_KEY}
   fmp_base_url: "https://financialmodelingprep.com/stable"
   shortlist_size: 30
+  shortlist_sector_cap: 5
   vix_panic_threshold: 35
   vix_warning_threshold: 25
   fmp_max_retries: 2
