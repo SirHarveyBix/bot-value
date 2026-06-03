@@ -51,6 +51,27 @@ fmp_call_counter: int = 0
 
 SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLY", "XLP", "XLI", "XLE", "XLB", "XLRE", "XLU", "XLC", "SPY"]
 
+SECTOR_ETF_NAMES: dict[str, str] = {
+    "XLK": "Technologie",
+    "XLV": "Santé",
+    "XLF": "Finance",
+    "XLY": "Consommation discrétionnaire",
+    "XLP": "Biens de consommation",
+    "XLI": "Industrie",
+    "XLE": "Énergie",
+    "XLB": "Matériaux",
+    "XLRE": "Immobilier",
+    "XLU": "Services aux collectivités",
+    "XLC": "Télécom & Médias",
+    "SPY": "S&P 500 (référence)",
+    "QQQ": "Nasdaq 100",
+    "IWM": "Russell 2000 (small caps)",
+    "DIA": "Dow Jones 30",
+    "VTI": "Marchés US total",
+    "GLD": "Or",
+    "TLT": "Obligations 20 ans US",
+}
+
 
 class FMPUnavailableError(Exception):
     """Levée quand FMP est inaccessible (clé absente ou 5xx après fmp_max_retries tentatives)."""

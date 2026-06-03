@@ -217,11 +217,19 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
         await asyncio.sleep(1.5)
 
         for i, (_, row) in enumerate(top_etfs.iterrows()):
-            symbol = escape_html(row["symbol"])
+            raw_symbol = row["symbol"]
+            symbol = escape_html(raw_symbol)
+            name = escape_html(str(row.get("name", raw_symbol)))
             score = int(row["score_global"])
-            msg = f"#{i + 1} <b>{symbol}</b>\n"
-            msg += f"Score : {score}/100 | Perf 6M : {row['perf_6m']:.1%}\n"
-            msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
+            perf_6m = row.get("perf_6m", 0.0) or 0.0
+            outperf = row.get("outperf_spy")
+
+            msg = f"#{i + 1} <b>{symbol}</b> — {name}\n"
+            msg += f"Score : {score}/100\n"
+            msg += f"Perf 6M : {perf_6m:+.1%}"
+            if outperf is not None and not (isinstance(outperf, float) and math.isnan(outperf)):
+                msg += f" | vs SPY : {outperf:+.1%}"
+            msg += f"\n🔗 <a href='https://finance.yahoo.com/quote/{raw_symbol}'>Yahoo Finance — {name}</a>"
 
             try:
                 await send_message_safe(

@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from scanner.config import CONFIG, logger
+from scanner.fetcher import SECTOR_ETF_NAMES
 from scanner.filters import sanity_check_gate
 from scanner.scoring.momentum import SECTOR_ETF_MAP, apply_momentum_penalties, calculate_momentum_metrics
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
@@ -355,7 +356,8 @@ def etf_scoring_pipeline(all_data, etfs):
             spy_perf = (spy_data["Close"].iloc[-1] - spy_data["Close"].iloc[-126]) / spy_data["Close"].iloc[-126]
             outperf_spy = perf_6m - spy_perf
 
-        rows.append({"symbol": symbol, "perf_6m": perf_6m, "outperf_spy": outperf_spy})
+        name = SECTOR_ETF_NAMES.get(symbol, symbol)
+        rows.append({"symbol": symbol, "name": name, "perf_6m": perf_6m, "outperf_spy": outperf_spy})
 
     if not rows:
         return pd.DataFrame()
