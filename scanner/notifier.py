@@ -1,5 +1,6 @@
 import asyncio
 import html
+import math
 import re
 from datetime import date, datetime
 
@@ -16,16 +17,6 @@ _TELEGRAM_INLINE_TAGS = frozenset(("b", "i", "u", "s", "a", "code", "pre"))
 def escape_html(text):
     """Échappe les caractères spéciaux pour le mode HTML de Telegram."""
     return html.escape(str(text))
-
-
-def truncate_message(msg: str, max_chars: int = None) -> str:
-    """Tronque un message Telegram à max_chars avec suffix explicite (Lacune 10)."""
-    if max_chars is None:
-        max_chars = CONFIG["scanner"].get("telegram_max_chars", 4096)
-    if len(msg) <= max_chars:
-        return msg
-    suffix = "\n[message tronqué]"
-    return msg[: max_chars - len(suffix)] + suffix
 
 
 def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
@@ -51,22 +42,34 @@ def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
     return truncated
 
 
-async def send_message_safe(bot: Bot, chat_id, text: str, **kwargs) -> None:
-    """Envoie un message Telegram en gérant RetryAfter (rate limit 429) et toute erreur."""
+async def send_message_safe(bot: Bot, chat_id, text: str, **kwargs):
+    """Envoie un message Telegram. Retourne l'objet Message (pour pin), ou None si erreur."""
     try:
-        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        sent = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         logger.info(f"Telegram message envoyé (chat_id={chat_id})")
+        return sent
     except RetryAfter as e:
         wait = int(e.retry_after) + 1
         logger.warning(f"Telegram RetryAfter {wait}s — pause avant réenvoi")
         await asyncio.sleep(wait)
         try:
-            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            sent = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             logger.info(f"Telegram message envoyé après retry (chat_id={chat_id})")
+            return sent
         except Exception as e2:
             logger.error(f"Telegram échec après retry: {e2}")
     except Exception as e:
         logger.error(f"Telegram send_message_safe: {e} (chat_id={chat_id})")
+    return None
+
+
+async def pin_message_safe(bot: Bot, chat_id, message_id: int) -> None:
+    """Épingle un message sans notification (silencieux)."""
+    try:
+        await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=True)
+        logger.info(f"Telegram message {message_id} épinglé")
+    except Exception as e:
+        logger.warning(f"Telegram pin_message_safe: {e} — le bot doit être Admin pour épingler")
 
 
 def _get_bot():
@@ -156,14 +159,15 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
 
     # 2. Envoi des Stocks (un par un)
     for i, (_, row) in enumerate(top_stocks.iterrows()):
-        symbol = escape_html(row["symbol"])
-        name = escape_html(row.get("name", row["symbol"]))
+        raw_symbol = row["symbol"]
+        symbol = escape_html(raw_symbol)
+        name = escape_html(row.get("name", raw_symbol))
         score = int(row["score_global"])
 
         # Détermination du statut de portefeuille pour le ticker
         status_tag = ""
-        if portfolio and symbol in portfolio:
-            item = portfolio[symbol]
+        if portfolio and raw_symbol in portfolio:
+            item = portfolio[raw_symbol]
             status = item["status"]
             days_held = item["days_held"]
             if status == "ACHAT":
@@ -227,18 +231,47 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
             except Exception as e:
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
 
+    # 4. Message résumé compact → épinglé (remplace le pin précédent)
+    pinned = _build_pinned_summary(top_stocks, top_etfs, market_regime)
+    sent = await send_message_safe(bot, chat_id, truncate_message_html_safe(pinned), parse_mode="HTML")
+    if sent:
+        await pin_message_safe(bot, chat_id, sent.message_id)
 
-def format_etf_signal(etf_data: dict, rank: int) -> str:
-    """Formate un signal ETF selon le template §6.2 de la spec."""
-    symbol = escape_html(etf_data.get("symbol", ""))
-    name = escape_html(etf_data.get("name", symbol))
-    score = int(etf_data.get("score_global", 0))
-    perf_6m = etf_data.get("perf_6m", 0) or 0
-    outperf_spy = etf_data.get("outperf_spy", 0) or 0
 
-    msg = f"#{rank} <b>{name}</b> (${symbol})\n"
-    msg += f"Score : {score}/100 | Perf 6M : {perf_6m:+.1%} vs SPY {outperf_spy:+.1%}\n"
-    msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
+def _build_pinned_summary(top_stocks, top_etfs, market_regime: str | None) -> str:
+    """Construit le message résumé compact destiné à être épinglé."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    regime_label = {
+        "panic": "🚨 PANIQUE",
+        "prudence": "⚠️ PRUDENCE",
+        "bear_light": "🐻 BEAR LIGHT",
+        "normal": "✅ NORMAL",
+    }.get(market_regime or "normal", "✅ NORMAL")
+
+    msg = f"📌 <b>ValueMomentum — {today}</b>\n"
+    msg += f"Régime : {regime_label}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+    if not top_stocks.empty:
+        msg += "🏆 <b>Top stocks</b>\n"
+        for i, (_, row) in enumerate(top_stocks.head(5).iterrows()):
+            sym = escape_html(row["symbol"])
+            score = int(row["score_global"])
+            perf = row.get("perf_6m", 0.0)
+            perf = 0.0 if (perf is None or (isinstance(perf, float) and math.isnan(perf))) else perf
+            msg += f"  {i + 1}. <b>{sym}</b> — {score}/100 | Perf 6M {perf:+.1%}\n"
+    else:
+        msg += "Aucun signal stock.\n"
+
+    if not top_etfs.empty:
+        msg += "📦 <b>Top ETFs</b>\n"
+        for i, (_, row) in enumerate(top_etfs.head(2).iterrows()):
+            sym = escape_html(row["symbol"])
+            score = int(row["score_global"])
+            msg += f"  {i + 1}. <b>{sym}</b> — {score}/100\n"
+
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "Commandes : /scan /status /help"
     return msg
 
 
@@ -297,3 +330,143 @@ async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits
     if top_stocks.empty and top_etfs.empty and not exits_today:
         return
     await send_telegram_signals(top_stocks, top_etfs, market_regime, portfolio, exits_today)
+
+
+_active_tasks: set[asyncio.Task] = set()
+_scan_in_progress = False
+
+
+async def _run_scan_guarded(run_scanner_fn) -> None:
+    """Wrapper pour le scan déclenché depuis Telegram : log les erreurs et libère le guard."""
+    global _scan_in_progress
+    try:
+        await run_scanner_fn(force=True)
+    except Exception as e:
+        logger.error(f"Erreur scan déclenché depuis Telegram: {e}")
+    finally:
+        _scan_in_progress = False
+
+
+async def poll_telegram_commands(run_scanner_fn) -> None:
+    """
+    Écoute les commandes Telegram entrantes et les exécute.
+    Tourne en parallèle du scheduler (asyncio.create_task).
+
+    Commandes disponibles :
+      /scan   — déclenche un scan immédiat (équivalent --force)
+      /status — affiche le dernier scan en base
+      /help   — liste les commandes
+    """
+    global _scan_in_progress
+    import sqlite3
+
+    from scanner.storage import DB_PATH
+
+    bot, chat_id = _get_bot()
+    if not bot:
+        return
+
+    last_update_id = None
+    logger.info("Telegram command polling démarré.")
+
+    while True:
+        try:
+            kwargs = {"timeout": 30, "allowed_updates": ["message"]}
+            if last_update_id is not None:
+                kwargs["offset"] = last_update_id + 1
+
+            updates = await bot.get_updates(**kwargs)
+
+            for update in updates:
+                try:
+                    last_update_id = update.update_id
+                    msg = update.message
+                    if not msg or not msg.text:
+                        continue
+
+                    # Filtre : n'accepte que les messages du chat configuré
+                    if str(msg.chat.id) != str(chat_id):
+                        continue
+
+                    parts = msg.text.strip().lower().split()
+                    if not parts:
+                        continue
+                    text = parts[0]
+
+                    if text in ("/scan", "/force"):
+                        if _scan_in_progress:
+                            await send_message_safe(
+                                bot,
+                                chat_id,
+                                "⚠️ Scan déjà en cours, patientez.",
+                                parse_mode="HTML",
+                            )
+                        else:
+                            await send_message_safe(
+                                bot,
+                                chat_id,
+                                "⏳ <b>Scan manuel déclenché…</b>\nRésultats dans 10–15 min.",
+                                parse_mode="HTML",
+                            )
+                            logger.info(f"Commande Telegram /scan reçue depuis chat_id={msg.chat.id}")
+                            _scan_in_progress = True
+                            task = asyncio.create_task(_run_scan_guarded(run_scanner_fn))
+                            _active_tasks.add(task)
+                            task.add_done_callback(_active_tasks.discard)
+
+                    elif text == "/status":
+
+                        def _get_status():
+                            try:
+                                with sqlite3.connect(DB_PATH) as conn:
+                                    return conn.execute(
+                                        "SELECT scan_date, market_regime, spy_price, vix FROM scans ORDER BY scan_date DESC LIMIT 1"
+                                    ).fetchone()
+                            except Exception as err:
+                                logger.warning(f"Erreur lecture statut DB: {err}")
+                                return None
+
+                        row = await asyncio.to_thread(_get_status)
+                        if row:
+                            scan_date, regime, spy, vix = row
+                            regime_label = {
+                                "panic": "🚨 PANIQUE",
+                                "prudence": "⚠️ PRUDENCE",
+                                "bear_light": "🐻 BEAR LIGHT",
+                                "normal": "✅ NORMAL",
+                            }.get(regime or "normal", "✅ NORMAL")
+                            status_msg = (
+                                f"📌 <b>Dernier scan : {scan_date}</b>\n"
+                                f"Régime : {regime_label} | SPY : {spy:.2f} | VIX : {vix:.1f}\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                "Commandes : /scan /status /help"
+                            )
+                        else:
+                            status_msg = "❓ Aucun scan en base."
+                        await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
+
+                    elif text == "/help":
+                        help_msg = (
+                            "🤖 <b>ValueMomentum Scanner — Commandes</b>\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            "/scan — Déclenche un scan immédiat\n"
+                            "/status — Affiche le dernier scan\n"
+                            "/help — Cette aide"
+                        )
+                        await send_message_safe(bot, chat_id, help_msg, parse_mode="HTML")
+
+                except Exception as e:
+                    logger.warning(f"Erreur traitement update {update.update_id}: {e}")
+
+        except asyncio.CancelledError:
+            logger.info("Telegram command polling arrêté.")
+            raise
+        except Exception as e:
+            if "401" in str(e) or "Unauthorized" in str(e):
+                logger.warning("Token Telegram invalide — rechargement")
+                bot, chat_id = _get_bot()
+                if not bot:
+                    break
+            else:
+                logger.warning(f"Telegram polling erreur: {e}")
+            await asyncio.sleep(5)

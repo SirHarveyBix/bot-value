@@ -13,7 +13,7 @@ from scanner.filters import (
     earnings_calendar_check,
     filter_post_scoring,
 )
-from scanner.notifier import truncate_message
+from scanner.notifier import truncate_message_html_safe as truncate_message
 from scanner.scoring.engine import compute_momentum_weights, compute_percentile_ranks
 from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics, compute_analyst_revision_3m
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
@@ -1290,7 +1290,7 @@ def test_inverse_vol_weights_no_data():
 
 def test_truncate_message_html_safe_closes_tags():
     """Message tronqué avec <b> non fermé → balise <b> fermée automatiquement."""
-    from scanner.notifier import truncate_message_html_safe
+    from scanner.notifier import truncate_message_html_safe as truncate_message_html_safe
 
     long_msg = "<b>" + "X" * 5000
     result = truncate_message_html_safe(long_msg, max_chars=100)
@@ -1300,7 +1300,7 @@ def test_truncate_message_html_safe_closes_tags():
 
 def test_truncate_message_html_safe_no_truncation_needed():
     """Message court → retourné intact."""
-    from scanner.notifier import truncate_message_html_safe
+    from scanner.notifier import truncate_message_html_safe as truncate_message_html_safe
 
     msg = "<b>Hello</b>"
     assert truncate_message_html_safe(msg, max_chars=4096) == msg
@@ -1308,7 +1308,7 @@ def test_truncate_message_html_safe_no_truncation_needed():
 
 def test_truncate_message_html_safe_nested_tags():
     """<b><i> ouverts sans fermeture → fermés dans l'ordre inverse."""
-    from scanner.notifier import truncate_message_html_safe
+    from scanner.notifier import truncate_message_html_safe as truncate_message_html_safe
 
     long_msg = "<b><i>" + "X" * 5000
     result = truncate_message_html_safe(long_msg, max_chars=100)
@@ -1559,3 +1559,48 @@ async def test_send_message_safe_catches_bad_request():
     with patch("scanner.notifier.logger") as mock_logger:
         await send_message_safe(mock_bot, "bad_chat_id", "test")
         assert mock_logger.error.called
+
+
+# ── compute_inverse_vol_weights (engine.py) ───────────────────────────────────
+
+
+def test_compute_inverse_vol_weights_sets_suggested_weight():
+    """
+    compute_inverse_vol_weights doit setter suggested_weight_pct sur chaque ticker
+    et les poids doivent sommer à 100%.
+    Était absent avant le fix (fonction jamais appelée dans main.py).
+    """
+    import numpy as np
+
+    from scanner.scoring.engine import compute_inverse_vol_weights
+
+    symbols = ["AAPL", "MSFT", "GOOG"]
+    df = pd.DataFrame({"symbol": symbols, "score_global": [90.0, 85.0, 80.0]})
+
+    rng = np.random.default_rng(42)
+    all_data = {
+        sym: {"prices": pd.DataFrame({"Close": 100 * np.cumprod(1 + rng.normal(0, 0.01, 65))})} for sym in symbols
+    }
+
+    result = compute_inverse_vol_weights(df, all_data)
+
+    assert "suggested_weight_pct" in result.columns
+    assert result["suggested_weight_pct"].notna().all()
+    assert abs(result["suggested_weight_pct"].sum() - 100.0) < 1e-6
+
+
+# ── check_batch_data_ratio (filters.py) ──────────────────────────────────────
+
+
+def test_check_batch_data_ratio_no_ghost_levels():
+    """
+    levels[0] peut contenir des tickers fantômes après pd.concat.
+    get_level_values(0).unique() compte uniquement les tickers présents.
+    """
+    df1 = pd.DataFrame(columns=pd.MultiIndex.from_tuples([("AAPL", "Close"), ("MSFT", "Close")]))
+    df2 = pd.DataFrame(columns=pd.MultiIndex.from_tuples([("GOOG", "Close")]))
+    combined = pd.concat([df1, df2], axis=1)
+
+    assert len(combined.columns.get_level_values(0).unique()) == 3
+    assert check_batch_data_ratio(combined, 4)  # 3/4 = 0.75 ≥ 0.60
+    assert not check_batch_data_ratio(combined, 6)  # 3/6 = 0.50 < 0.60

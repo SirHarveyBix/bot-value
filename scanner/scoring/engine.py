@@ -78,11 +78,13 @@ def momentum_screening_pipeline(price_data, symbols):
     """Pipeline initial pour filtrer les tickers par momentum pur."""
     rows = []
 
+    present = (
+        set(price_data.columns.get_level_values(0).unique()) if isinstance(price_data.columns, pd.MultiIndex) else set()
+    )
     for symbol in symbols:
         prices = None
-        if isinstance(price_data.columns, pd.MultiIndex):
-            if symbol in price_data.columns.levels[0]:
-                prices = price_data[symbol]
+        if symbol in present:
+            prices = price_data[symbol]
 
         if prices is None or len(prices) < 126:
             continue
@@ -386,6 +388,7 @@ def compute_inverse_vol_weights(ranked_df: pd.DataFrame, all_data: dict) -> pd.D
                 inv_vols[sym] = 1.0 / sigma
 
     if not inv_vols:
+        ranked_df = ranked_df.copy()
         ranked_df["suggested_weight_pct"] = 100.0 / len(symbols) if symbols else None
         return ranked_df
 

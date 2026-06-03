@@ -307,9 +307,9 @@ async def fetch_fmp_data(client, symbol):
         if is_list and bs_list and len(is_data) >= 1 and len(bs_data) >= 1:
             roes = []
             for i in range(min(3, len(is_data), len(bs_data))):
-                ni = is_data[i].get("netIncome", 0)
-                te = bs_data[i].get("totalStockholdersEquity", 1)
-                if te and te > 0:
+                ni = is_data[i].get("netIncome")
+                te = bs_data[i].get("totalStockholdersEquity")
+                if ni is not None and te is not None and te > 0:
                     roes.append(ni / te)
             if roes:
                 if len(roes) < 3:
@@ -416,6 +416,12 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
     if prices_batch is None:
         prices_batch = await fetch_prices_batch(all_tickers)
 
+    present = (
+        set(prices_batch.columns.get_level_values(0).unique())
+        if isinstance(prices_batch.columns, pd.MultiIndex)
+        else set()
+    )
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             for i, symbol in enumerate(tickers):
@@ -425,22 +431,14 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
                 logger.info(f"Sniper : Récupération des fondamentaux pour {symbol}...")
                 info = await fetch_ticker_info(symbol, client=client)
 
-                prices = None
-                if isinstance(prices_batch.columns, pd.MultiIndex):
-                    if symbol in prices_batch.columns.levels[0]:
-                        prices = prices_batch[symbol]
-
+                prices = prices_batch[symbol] if symbol in present else None
                 results[symbol] = {"info": info, "prices": prices}
     except FMPUnavailableError:
         await notify_fmp_unavailable()
         raise
 
     for s_etf in list(set(etfs + SECTOR_ETFS)):
-        prices = None
-        if isinstance(prices_batch.columns, pd.MultiIndex):
-            if s_etf in prices_batch.columns.levels[0]:
-                prices = prices_batch[s_etf]
-
+        prices = prices_batch[s_etf] if s_etf in present else None
         results[s_etf] = {"info": {}, "prices": prices}
 
     return results
