@@ -1559,3 +1559,48 @@ async def test_send_message_safe_catches_bad_request():
     with patch("scanner.notifier.logger") as mock_logger:
         await send_message_safe(mock_bot, "bad_chat_id", "test")
         assert mock_logger.error.called
+
+
+# ── compute_inverse_vol_weights (engine.py) ───────────────────────────────────
+
+
+def test_compute_inverse_vol_weights_sets_suggested_weight():
+    """
+    compute_inverse_vol_weights doit setter suggested_weight_pct sur chaque ticker
+    et les poids doivent sommer à 100%.
+    Était absent avant le fix (fonction jamais appelée dans main.py).
+    """
+    import numpy as np
+
+    from scanner.scoring.engine import compute_inverse_vol_weights
+
+    symbols = ["AAPL", "MSFT", "GOOG"]
+    df = pd.DataFrame({"symbol": symbols, "score_global": [90.0, 85.0, 80.0]})
+
+    rng = np.random.default_rng(42)
+    all_data = {
+        sym: {"prices": pd.DataFrame({"Close": 100 * np.cumprod(1 + rng.normal(0, 0.01, 65))})} for sym in symbols
+    }
+
+    result = compute_inverse_vol_weights(df, all_data)
+
+    assert "suggested_weight_pct" in result.columns
+    assert result["suggested_weight_pct"].notna().all()
+    assert abs(result["suggested_weight_pct"].sum() - 100.0) < 1e-6
+
+
+# ── check_batch_data_ratio (filters.py) ──────────────────────────────────────
+
+
+def test_check_batch_data_ratio_no_ghost_levels():
+    """
+    levels[0] peut contenir des tickers fantômes après pd.concat.
+    get_level_values(0).unique() compte uniquement les tickers présents.
+    """
+    df1 = pd.DataFrame(columns=pd.MultiIndex.from_tuples([("AAPL", "Close"), ("MSFT", "Close")]))
+    df2 = pd.DataFrame(columns=pd.MultiIndex.from_tuples([("GOOG", "Close")]))
+    combined = pd.concat([df1, df2], axis=1)
+
+    assert len(combined.columns.get_level_values(0).unique()) == 3
+    assert check_batch_data_ratio(combined, 4)  # 3/4 = 0.75 ≥ 0.60
+    assert not check_batch_data_ratio(combined, 6)  # 3/6 = 0.50 < 0.60
