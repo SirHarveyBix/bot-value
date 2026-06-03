@@ -41,22 +41,34 @@ def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
     return truncated
 
 
-async def send_message_safe(bot: Bot, chat_id, text: str, **kwargs) -> None:
-    """Envoie un message Telegram en gérant RetryAfter (rate limit 429) et toute erreur."""
+async def send_message_safe(bot: Bot, chat_id, text: str, **kwargs):
+    """Envoie un message Telegram. Retourne l'objet Message (pour pin), ou None si erreur."""
     try:
-        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        sent = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         logger.info(f"Telegram message envoyé (chat_id={chat_id})")
+        return sent
     except RetryAfter as e:
         wait = int(e.retry_after) + 1
         logger.warning(f"Telegram RetryAfter {wait}s — pause avant réenvoi")
         await asyncio.sleep(wait)
         try:
-            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            sent = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             logger.info(f"Telegram message envoyé après retry (chat_id={chat_id})")
+            return sent
         except Exception as e2:
             logger.error(f"Telegram échec après retry: {e2}")
     except Exception as e:
         logger.error(f"Telegram send_message_safe: {e} (chat_id={chat_id})")
+    return None
+
+
+async def pin_message_safe(bot: Bot, chat_id, message_id: int) -> None:
+    """Épingle un message sans notification (silencieux)."""
+    try:
+        await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=True)
+        logger.info(f"Telegram message {message_id} épinglé")
+    except Exception as e:
+        logger.warning(f"Telegram pin_message_safe: {e} — le bot doit être Admin pour épingler")
 
 
 def _get_bot():
@@ -218,6 +230,48 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
             except Exception as e:
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
 
+    # 4. Message résumé compact → épinglé (remplace le pin précédent)
+    pinned = _build_pinned_summary(top_stocks, top_etfs, market_regime)
+    sent = await send_message_safe(bot, chat_id, truncate_message_html_safe(pinned), parse_mode="HTML")
+    if sent:
+        await pin_message_safe(bot, chat_id, sent.message_id)
+
+
+def _build_pinned_summary(top_stocks, top_etfs, market_regime: str | None) -> str:
+    """Construit le message résumé compact destiné à être épinglé."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    regime_label = {
+        "panic": "🚨 PANIQUE",
+        "prudence": "⚠️ PRUDENCE",
+        "bear_light": "🐻 BEAR LIGHT",
+        "normal": "✅ NORMAL",
+    }.get(market_regime or "normal", "✅ NORMAL")
+
+    msg = f"📌 <b>ValueMomentum — {today}</b>\n"
+    msg += f"Régime : {regime_label}\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+    if not top_stocks.empty:
+        msg += "🏆 <b>Top stocks</b>\n"
+        for i, (_, row) in enumerate(top_stocks.head(5).iterrows()):
+            sym = escape_html(row["symbol"])
+            score = int(row["score_global"])
+            perf = row.get("perf_6m", 0) or 0
+            msg += f"  {i + 1}. <b>{sym}</b> — {score}/100 | Perf 6M {perf:+.1%}\n"
+    else:
+        msg += "Aucun signal stock.\n"
+
+    if not top_etfs.empty:
+        msg += "📦 <b>Top ETFs</b>\n"
+        for i, (_, row) in enumerate(top_etfs.head(2).iterrows()):
+            sym = escape_html(row["symbol"])
+            score = int(row["score_global"])
+            msg += f"  {i + 1}. <b>{sym}</b> — {score}/100\n"
+
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "Commandes : /scan /status /help"
+    return msg
+
 
 _GATE_EMOJI = {
     "qualité": "📊",
@@ -342,13 +396,23 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                     row = await asyncio.to_thread(_get_status)
                     if row:
                         scan_date, regime, spy, vix = row
+                        regime_label = {
+                            "panic": "🚨 PANIQUE",
+                            "prudence": "⚠️ PRUDENCE",
+                            "bear_light": "🐻 BEAR LIGHT",
+                            "normal": "✅ NORMAL",
+                        }.get(regime or "normal", "✅ NORMAL")
                         status_msg = (
-                            f"📊 <b>Dernier scan : {scan_date}</b>\n"
-                            f"Régime : {regime} | SPY : {spy:.2f} | VIX : {vix:.1f}"
+                            f"📌 <b>Dernier scan : {scan_date}</b>\n"
+                            f"Régime : {regime_label} | SPY : {spy:.2f} | VIX : {vix:.1f}\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            "Commandes : /scan /status /help"
                         )
                     else:
                         status_msg = "❓ Aucun scan en base."
-                    await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
+                    sent = await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
+                    if sent:
+                        await pin_message_safe(bot, chat_id, sent.message_id)
 
                 elif text == "/help":
                     help_msg = (
