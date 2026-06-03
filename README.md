@@ -136,6 +136,8 @@ Une fois le bot lancé en mode scheduler (`python3 main.py`), vous pouvez lui en
 | `/help`   | Liste toutes les commandes disponibles                 |
 
 > **Note** : le bot n'accepte les commandes que depuis votre `TELEGRAM_CHAT_ID` configuré dans `.env`. Les messages d'autres chats sont ignorés.
+>
+> **Garde concurrente** : si un scan est déjà en cours, `/scan` répond `⚠️ Scan déjà en cours, patientez.` plutôt que de lancer un second scan en parallèle (ce qui provoquerait un ban IP yfinance).
 
 ---
 
