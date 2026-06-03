@@ -6,6 +6,8 @@ venv/
 .env
 .ruff_cache
 .pytest_cache
+.coverage
+coverage.*
 
 # Data & Logs
 data/cache/
