@@ -1,5 +1,6 @@
 import asyncio
 import html
+import math
 import re
 from datetime import date, datetime
 
@@ -256,7 +257,8 @@ def _build_pinned_summary(top_stocks, top_etfs, market_regime: str | None) -> st
         for i, (_, row) in enumerate(top_stocks.head(5).iterrows()):
             sym = escape_html(row["symbol"])
             score = int(row["score_global"])
-            perf = row.get("perf_6m", 0) or 0
+            perf = row.get("perf_6m", 0.0)
+            perf = 0.0 if (perf is None or (isinstance(perf, float) and math.isnan(perf))) else perf
             msg += f"  {i + 1}. <b>{sym}</b> — {score}/100 | Perf 6M {perf:+.1%}\n"
     else:
         msg += "Aucun signal stock.\n"
@@ -330,6 +332,21 @@ async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits
     await send_telegram_signals(top_stocks, top_etfs, market_regime, portfolio, exits_today)
 
 
+_active_tasks: set[asyncio.Task] = set()
+_scan_in_progress = False
+
+
+async def _run_scan_guarded(run_scanner_fn) -> None:
+    """Wrapper pour le scan déclenché depuis Telegram : log les erreurs et libère le guard."""
+    global _scan_in_progress
+    try:
+        await run_scanner_fn(force=True)
+    except Exception as e:
+        logger.error(f"Erreur scan déclenché depuis Telegram: {e}")
+    finally:
+        _scan_in_progress = False
+
+
 async def poll_telegram_commands(run_scanner_fn) -> None:
     """
     Écoute les commandes Telegram entrantes et les exécute.
@@ -340,6 +357,11 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
       /status — affiche le dernier scan en base
       /help   — liste les commandes
     """
+    global _scan_in_progress
+    import sqlite3
+
+    from scanner.storage import DB_PATH
+
     bot, chat_id = _get_bot()
     if not bot:
         return
@@ -356,80 +378,95 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
             updates = await bot.get_updates(**kwargs)
 
             for update in updates:
-                last_update_id = update.update_id
-                msg = update.message
-                if not msg or not msg.text:
-                    continue
+                try:
+                    last_update_id = update.update_id
+                    msg = update.message
+                    if not msg or not msg.text:
+                        continue
 
-                # Filtre : n'accepte que les messages du chat configuré
-                if str(msg.chat.id) != str(chat_id):
-                    continue
+                    # Filtre : n'accepte que les messages du chat configuré
+                    if str(msg.chat.id) != str(chat_id):
+                        continue
 
-                parts = msg.text.strip().lower().split()
-                if not parts:
-                    continue
-                text = parts[0]
+                    parts = msg.text.strip().lower().split()
+                    if not parts:
+                        continue
+                    text = parts[0]
 
-                if text in ("/scan", "/force"):
-                    await send_message_safe(
-                        bot,
-                        chat_id,
-                        "⏳ <b>Scan manuel déclenché…</b>\nRésultats dans 10–15 min.",
-                        parse_mode="HTML",
-                    )
-                    logger.info(f"Commande Telegram /scan reçue depuis chat_id={msg.chat.id}")
-                    asyncio.create_task(run_scanner_fn(force=True))
+                    if text in ("/scan", "/force"):
+                        if _scan_in_progress:
+                            await send_message_safe(
+                                bot,
+                                chat_id,
+                                "⚠️ Scan déjà en cours, patientez.",
+                                parse_mode="HTML",
+                            )
+                        else:
+                            await send_message_safe(
+                                bot,
+                                chat_id,
+                                "⏳ <b>Scan manuel déclenché…</b>\nRésultats dans 10–15 min.",
+                                parse_mode="HTML",
+                            )
+                            logger.info(f"Commande Telegram /scan reçue depuis chat_id={msg.chat.id}")
+                            _scan_in_progress = True
+                            task = asyncio.create_task(_run_scan_guarded(run_scanner_fn))
+                            _active_tasks.add(task)
+                            task.add_done_callback(_active_tasks.discard)
 
-                elif text == "/status":
-                    import sqlite3
+                    elif text == "/status":
 
-                    from scanner.storage import DB_PATH
+                        def _get_status():
+                            try:
+                                with sqlite3.connect(DB_PATH) as conn:
+                                    return conn.execute(
+                                        "SELECT scan_date, market_regime, spy_price, vix FROM scans ORDER BY scan_date DESC LIMIT 1"
+                                    ).fetchone()
+                            except Exception as err:
+                                logger.warning(f"Erreur lecture statut DB: {err}")
+                                return None
 
-                    def _get_status():
-                        try:
-                            conn = sqlite3.connect(DB_PATH)
-                            row = conn.execute(
-                                "SELECT scan_date, market_regime, spy_price, vix FROM scans ORDER BY scan_date DESC LIMIT 1"
-                            ).fetchone()
-                            conn.close()
-                            return row
-                        except Exception:
-                            return None
+                        row = await asyncio.to_thread(_get_status)
+                        if row:
+                            scan_date, regime, spy, vix = row
+                            regime_label = {
+                                "panic": "🚨 PANIQUE",
+                                "prudence": "⚠️ PRUDENCE",
+                                "bear_light": "🐻 BEAR LIGHT",
+                                "normal": "✅ NORMAL",
+                            }.get(regime or "normal", "✅ NORMAL")
+                            status_msg = (
+                                f"📌 <b>Dernier scan : {scan_date}</b>\n"
+                                f"Régime : {regime_label} | SPY : {spy:.2f} | VIX : {vix:.1f}\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                "Commandes : /scan /status /help"
+                            )
+                        else:
+                            status_msg = "❓ Aucun scan en base."
+                        await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
 
-                    row = await asyncio.to_thread(_get_status)
-                    if row:
-                        scan_date, regime, spy, vix = row
-                        regime_label = {
-                            "panic": "🚨 PANIQUE",
-                            "prudence": "⚠️ PRUDENCE",
-                            "bear_light": "🐻 BEAR LIGHT",
-                            "normal": "✅ NORMAL",
-                        }.get(regime or "normal", "✅ NORMAL")
-                        status_msg = (
-                            f"📌 <b>Dernier scan : {scan_date}</b>\n"
-                            f"Régime : {regime_label} | SPY : {spy:.2f} | VIX : {vix:.1f}\n"
+                    elif text == "/help":
+                        help_msg = (
+                            "🤖 <b>ValueMomentum Scanner — Commandes</b>\n"
                             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                            "Commandes : /scan /status /help"
+                            "/scan — Déclenche un scan immédiat\n"
+                            "/status — Affiche le dernier scan\n"
+                            "/help — Cette aide"
                         )
-                    else:
-                        status_msg = "❓ Aucun scan en base."
-                    sent = await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
-                    if sent:
-                        await pin_message_safe(bot, chat_id, sent.message_id)
+                        await send_message_safe(bot, chat_id, help_msg, parse_mode="HTML")
 
-                elif text == "/help":
-                    help_msg = (
-                        "🤖 <b>ValueMomentum Scanner — Commandes</b>\n"
-                        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        "/scan — Déclenche un scan immédiat\n"
-                        "/status — Affiche le dernier scan\n"
-                        "/help — Cette aide"
-                    )
-                    await send_message_safe(bot, chat_id, help_msg, parse_mode="HTML")
+                except Exception as e:
+                    logger.warning(f"Erreur traitement update {update.update_id}: {e}")
 
         except asyncio.CancelledError:
             logger.info("Telegram command polling arrêté.")
-            break
+            raise
         except Exception as e:
-            logger.warning(f"Telegram polling erreur: {e}")
+            if "401" in str(e) or "Unauthorized" in str(e):
+                logger.warning("Token Telegram invalide — rechargement")
+                bot, chat_id = _get_bot()
+                if not bot:
+                    break
+            else:
+                logger.warning(f"Telegram polling erreur: {e}")
             await asyncio.sleep(5)

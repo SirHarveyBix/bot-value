@@ -128,7 +128,7 @@ async def run_scanner(force=False):
         etf_tickers = list(dict.fromkeys(initial_etfs + list(SECTOR_ETFS)))
         price_data = await fetch_prices_batch(eligible_stocks + etf_tickers)
 
-        if not check_batch_data_ratio(price_data, len(eligible_stocks)):
+        if not check_batch_data_ratio(price_data, len(eligible_stocks) + len(etf_tickers)):
             logger.error("Scan interrompu : trop d'échecs lors du batch download.")
             await notify_yfinance_ban()
             return
