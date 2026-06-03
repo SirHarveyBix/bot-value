@@ -200,7 +200,8 @@ def _roe_from_yfinance(symbol: str) -> float | None:
         ticker = yf.Ticker(symbol)
         is_df = ticker.get_income_stmt(pretty=False, freq="yearly")
         bs_df = ticker.get_balance_sheet(pretty=False, freq="yearly")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"_roe_from_yfinance {symbol}: exception {type(e).__name__}: {e}")
         return None
 
     if is_df is None or is_df.empty or bs_df is None or bs_df.empty:
@@ -380,8 +381,11 @@ async def fetch_ticker_info(symbol, client=None):
     if client:
         info = await fetch_fmp_data(client, symbol)
 
-    if info:
+    if info and info.get("roe_3y") is not None:
         cache.set("fundamentals", symbol, info)
+    elif info:
+        # roe_3y=None (ban yfinance ou FMP plan gap) — pas de mise en cache pour forcer retry au prochain scan
+        logger.warning(f"fetch_ticker_info {symbol}: roe_3y=None, résultat non mis en cache (retry au prochain scan)")
     return info
 
 
