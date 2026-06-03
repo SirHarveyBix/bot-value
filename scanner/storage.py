@@ -255,9 +255,7 @@ def save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_dat
     logger.info(f"Signaux sauvegardés dans SQLite (Scan ID: {scan_id})")
 
 
-def save_signals(top_stocks, top_etfs, all_data, universe_size, market_data=None):
-    """Point d'entrée principal sauvegarde signaux SQLite."""
-    save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_data)
+save_signals = save_signals_to_db
 
 
 async def update_signal_returns():
@@ -271,16 +269,18 @@ async def update_signal_returns():
         await db.execute("PRAGMA journal_mode=WAL;")
 
         async with db.execute(
-            "SELECT id, symbol, price_at_signal FROM signals "
-            "WHERE price_30d_later IS NULL AND price_at_signal IS NOT NULL "
-            "AND first_seen_date <= date('now', '-30 days')"
+            "SELECT s.id, s.symbol, s.price_at_signal FROM signals s "
+            "JOIN scans sc ON sc.id = s.scan_id "
+            "WHERE s.price_30d_later IS NULL AND s.price_at_signal IS NOT NULL "
+            "AND sc.scan_date <= date('now', '-30 days')"
         ) as cur:
             rows_30d = await cur.fetchall()
 
         async with db.execute(
-            "SELECT id, symbol, price_at_signal FROM signals "
-            "WHERE price_90d_later IS NULL AND price_at_signal IS NOT NULL "
-            "AND first_seen_date <= date('now', '-90 days')"
+            "SELECT s.id, s.symbol, s.price_at_signal FROM signals s "
+            "JOIN scans sc ON sc.id = s.scan_id "
+            "WHERE s.price_90d_later IS NULL AND s.price_at_signal IS NOT NULL "
+            "AND sc.scan_date <= date('now', '-90 days')"
         ) as cur:
             rows_90d = await cur.fetchall()
 
@@ -440,9 +440,9 @@ def get_first_seen_dates_batch(symbols: list[str], today_str: str) -> dict[str, 
         conn = sqlite3.connect(DB_PATH)
         placeholders = ",".join("?" * len(symbols))
         rows = conn.execute(
-            f"SELECT symbol, first_seen_date FROM signals s "
+            f"SELECT symbol, MIN(first_seen_date) FROM signals "
             f"WHERE symbol IN ({placeholders}) AND first_seen_date IS NOT NULL "
-            f"AND id = (SELECT MAX(id) FROM signals WHERE symbol = s.symbol AND first_seen_date IS NOT NULL)",
+            f"GROUP BY symbol",
             symbols,
         ).fetchall()
         conn.close()

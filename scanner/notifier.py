@@ -18,16 +18,6 @@ def escape_html(text):
     return html.escape(str(text))
 
 
-def truncate_message(msg: str, max_chars: int = None) -> str:
-    """Tronque un message Telegram à max_chars avec suffix explicite (Lacune 10)."""
-    if max_chars is None:
-        max_chars = CONFIG["scanner"].get("telegram_max_chars", 4096)
-    if len(msg) <= max_chars:
-        return msg
-    suffix = "\n[message tronqué]"
-    return msg[: max_chars - len(suffix)] + suffix
-
-
 def truncate_message_html_safe(msg: str, max_chars: int = None) -> str:
     """Tronque à max_chars et ferme les balises HTML ouvertes (sécurité parse_mode HTML)."""
     if max_chars is None:
@@ -156,14 +146,15 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
 
     # 2. Envoi des Stocks (un par un)
     for i, (_, row) in enumerate(top_stocks.iterrows()):
-        symbol = escape_html(row["symbol"])
-        name = escape_html(row.get("name", row["symbol"]))
+        raw_symbol = row["symbol"]
+        symbol = escape_html(raw_symbol)
+        name = escape_html(row.get("name", raw_symbol))
         score = int(row["score_global"])
 
         # Détermination du statut de portefeuille pour le ticker
         status_tag = ""
-        if portfolio and symbol in portfolio:
-            item = portfolio[symbol]
+        if portfolio and raw_symbol in portfolio:
+            item = portfolio[raw_symbol]
             status = item["status"]
             days_held = item["days_held"]
             if status == "ACHAT":
@@ -228,20 +219,6 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
                 logger.error(f"Erreur envoi Telegram pour {symbol}: {e}")
 
 
-def format_etf_signal(etf_data: dict, rank: int) -> str:
-    """Formate un signal ETF selon le template §6.2 de la spec."""
-    symbol = escape_html(etf_data.get("symbol", ""))
-    name = escape_html(etf_data.get("name", symbol))
-    score = int(etf_data.get("score_global", 0))
-    perf_6m = etf_data.get("perf_6m", 0) or 0
-    outperf_spy = etf_data.get("outperf_spy", 0) or 0
-
-    msg = f"#{rank} <b>{name}</b> (${symbol})\n"
-    msg += f"Score : {score}/100 | Perf 6M : {perf_6m:+.1%} vs SPY {outperf_spy:+.1%}\n"
-    msg += f"🔗 <a href='https://finance.yahoo.com/quote/{symbol}'>Yahoo Finance</a>"
-    return msg
-
-
 _GATE_EMOJI = {
     "qualité": "📊",
     "valorisation": "💰",
@@ -297,3 +274,95 @@ async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits
     if top_stocks.empty and top_etfs.empty and not exits_today:
         return
     await send_telegram_signals(top_stocks, top_etfs, market_regime, portfolio, exits_today)
+
+
+async def poll_telegram_commands(run_scanner_fn) -> None:
+    """
+    Écoute les commandes Telegram entrantes et les exécute.
+    Tourne en parallèle du scheduler (asyncio.create_task).
+
+    Commandes disponibles :
+      /scan   — déclenche un scan immédiat (équivalent --force)
+      /status — affiche le dernier scan en base
+      /help   — liste les commandes
+    """
+    bot, chat_id = _get_bot()
+    if not bot:
+        return
+
+    last_update_id = None
+    logger.info("Telegram command polling démarré.")
+
+    while True:
+        try:
+            kwargs = {"timeout": 30, "allowed_updates": ["message"]}
+            if last_update_id is not None:
+                kwargs["offset"] = last_update_id + 1
+
+            updates = await bot.get_updates(**kwargs)
+
+            for update in updates:
+                last_update_id = update.update_id
+                msg = update.message
+                if not msg or not msg.text:
+                    continue
+
+                # Filtre : n'accepte que les messages du chat configuré
+                if str(msg.chat.id) != str(chat_id):
+                    continue
+
+                text = msg.text.strip().lower().split()[0]
+
+                if text in ("/scan", "/force"):
+                    await send_message_safe(
+                        bot,
+                        chat_id,
+                        "⏳ <b>Scan manuel déclenché…</b>\nRésultats dans 10–15 min.",
+                        parse_mode="HTML",
+                    )
+                    logger.info(f"Commande Telegram /scan reçue depuis chat_id={msg.chat.id}")
+                    asyncio.create_task(run_scanner_fn(force=True))
+
+                elif text == "/status":
+                    import sqlite3
+
+                    from scanner.storage import DB_PATH
+
+                    def _get_status():
+                        try:
+                            conn = sqlite3.connect(DB_PATH)
+                            row = conn.execute(
+                                "SELECT scan_date, market_regime, spy_price, vix FROM scans ORDER BY scan_date DESC LIMIT 1"
+                            ).fetchone()
+                            conn.close()
+                            return row
+                        except Exception:
+                            return None
+
+                    row = await asyncio.to_thread(_get_status)
+                    if row:
+                        scan_date, regime, spy, vix = row
+                        status_msg = (
+                            f"📊 <b>Dernier scan : {scan_date}</b>\n"
+                            f"Régime : {regime} | SPY : {spy:.2f} | VIX : {vix:.1f}"
+                        )
+                    else:
+                        status_msg = "❓ Aucun scan en base."
+                    await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
+
+                elif text == "/help":
+                    help_msg = (
+                        "🤖 <b>ValueMomentum Scanner — Commandes</b>\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "/scan — Déclenche un scan immédiat\n"
+                        "/status — Affiche le dernier scan\n"
+                        "/help — Cette aide"
+                    )
+                    await send_message_safe(bot, chat_id, help_msg, parse_mode="HTML")
+
+        except asyncio.CancelledError:
+            logger.info("Telegram command polling arrêté.")
+            break
+        except Exception as e:
+            logger.warning(f"Telegram polling erreur: {e}")
+            await asyncio.sleep(5)

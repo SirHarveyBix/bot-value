@@ -21,7 +21,8 @@ def cap_sector_shortlist(momentum_df: pd.DataFrame, cap: int) -> list[str]:
 
     for _, row in momentum_df.iterrows():
         symbol = row["symbol"]
-        info = cache.get("fundamentals", symbol, ttl) or {}
+        # Priorité FMP (fundamentals) puis yfinance (eligibility) pour le secteur
+        info = cache.get("fundamentals", symbol, ttl) or cache.get("eligibility", symbol, ttl) or {}
         sector = info.get("sector") or "Unknown"
 
         if sector_counts.get(sector, 0) < cap:
@@ -165,7 +166,8 @@ def check_batch_data_ratio(price_data, eligible_count):
         return False
 
     if isinstance(price_data.columns, pd.MultiIndex):
-        valid_count = len(price_data.columns.levels[0])
+        # get_level_values(0).unique() = tickers réellement présents (évite les fantômes de levels[0] après concat)
+        valid_count = len(price_data.columns.get_level_values(0).unique())
     else:
         valid_count = 1 if not price_data.empty else 0
 

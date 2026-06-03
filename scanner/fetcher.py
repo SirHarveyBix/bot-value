@@ -307,9 +307,9 @@ async def fetch_fmp_data(client, symbol):
         if is_list and bs_list and len(is_data) >= 1 and len(bs_data) >= 1:
             roes = []
             for i in range(min(3, len(is_data), len(bs_data))):
-                ni = is_data[i].get("netIncome", 0)
-                te = bs_data[i].get("totalStockholdersEquity", 1)
-                if te and te > 0:
+                ni = is_data[i].get("netIncome")
+                te = bs_data[i].get("totalStockholdersEquity")
+                if ni is not None and te is not None and te > 0:
                     roes.append(ni / te)
             if roes:
                 if len(roes) < 3:

@@ -10,11 +10,23 @@ from pytz import timezone
 
 import scanner.fetcher as _fetcher
 from scanner.config import CONFIG, logger
-from scanner.fetcher import FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
+from scanner.fetcher import SECTOR_ETFS, FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
 from scanner.filters import cap_sector_shortlist, check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
-from scanner.notifier import notify, notify_exclusions, notify_panic, notify_vix_unavailable, notify_yfinance_ban
-from scanner.scoring.engine import etf_scoring_pipeline, momentum_screening_pipeline, stock_scoring_pipeline
+from scanner.notifier import (
+    notify,
+    notify_exclusions,
+    notify_panic,
+    notify_vix_unavailable,
+    notify_yfinance_ban,
+    poll_telegram_commands,
+)
+from scanner.scoring.engine import (
+    compute_inverse_vol_weights,
+    etf_scoring_pipeline,
+    momentum_screening_pipeline,
+    stock_scoring_pipeline,
+)
 from scanner.storage import (
     DB_PATH,
     export_signals_json,
@@ -112,8 +124,9 @@ async def run_scanner(force=False):
             )
             return
 
-        # 3. Le Chalutier : Fetch uniquement les prix pour tout l'univers éligible
-        price_data = await fetch_prices_batch(eligible_stocks)
+        # 3. Le Chalutier : prix stocks + ETFs sectoriels (sector outperformance + ETF scoring)
+        etf_tickers = list(dict.fromkeys(initial_etfs + list(SECTOR_ETFS)))
+        price_data = await fetch_prices_batch(eligible_stocks + etf_tickers)
 
         if not check_batch_data_ratio(price_data, len(eligible_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du batch download.")
@@ -145,6 +158,8 @@ async def run_scanner(force=False):
 
         # 7. Post-Scoring Filters
         top_10_stocks = await filter_post_scoring(ranked_stocks_df, all_data, exclusions_out=exclusions)
+        if not top_10_stocks.empty:
+            top_10_stocks = compute_inverse_vol_weights(top_10_stocks, all_data)
         top_5_etfs = ranked_etfs_df.head(5)
 
         # T049: Anti survivorship bias — stocker univers Chalutier complet
@@ -252,7 +267,17 @@ async def main():
 
         logger.info("Scheduler configuré : scan 09h35 ET + retours 18h00 ET, lundi-vendredi.")
 
-        await scheduler.run_until_stopped()
+        # Commandes Telegram depuis le téléphone (/scan, /status, /help)
+        telegram_task = asyncio.create_task(poll_telegram_commands(run_scanner))
+
+        try:
+            await scheduler.run_until_stopped()
+        finally:
+            telegram_task.cancel()
+            try:
+                await telegram_task
+            except asyncio.CancelledError:
+                pass
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from scanner.filters import (
     earnings_calendar_check,
     filter_post_scoring,
 )
-from scanner.notifier import truncate_message
+from scanner.notifier import truncate_message_html_safe as truncate_message
 from scanner.scoring.engine import compute_momentum_weights, compute_percentile_ranks
 from scanner.scoring.momentum import apply_momentum_penalties, calculate_momentum_metrics, compute_analyst_revision_3m
 from scanner.scoring.quality import apply_quality_gates, calculate_quality_metrics
@@ -1290,7 +1290,7 @@ def test_inverse_vol_weights_no_data():
 
 def test_truncate_message_html_safe_closes_tags():
     """Message tronqué avec <b> non fermé → balise <b> fermée automatiquement."""
-    from scanner.notifier import truncate_message_html_safe
+    from scanner.notifier import truncate_message_html_safe as truncate_message_html_safe
 
     long_msg = "<b>" + "X" * 5000
     result = truncate_message_html_safe(long_msg, max_chars=100)
@@ -1300,7 +1300,7 @@ def test_truncate_message_html_safe_closes_tags():
 
 def test_truncate_message_html_safe_no_truncation_needed():
     """Message court → retourné intact."""
-    from scanner.notifier import truncate_message_html_safe
+    from scanner.notifier import truncate_message_html_safe as truncate_message_html_safe
 
     msg = "<b>Hello</b>"
     assert truncate_message_html_safe(msg, max_chars=4096) == msg
@@ -1308,7 +1308,7 @@ def test_truncate_message_html_safe_no_truncation_needed():
 
 def test_truncate_message_html_safe_nested_tags():
     """<b><i> ouverts sans fermeture → fermés dans l'ordre inverse."""
-    from scanner.notifier import truncate_message_html_safe
+    from scanner.notifier import truncate_message_html_safe as truncate_message_html_safe
 
     long_msg = "<b><i>" + "X" * 5000
     result = truncate_message_html_safe(long_msg, max_chars=100)

@@ -90,7 +90,7 @@ def _check_single_ticker(symbol):
     try:
         # Tenter de récupérer depuis le cache d'abord (TTL depuis config — cohérence avec fetcher.py)
         _ttl = CONFIG["scanner"].get("cache_ttl_fundamentals", 97200)
-        info = cache.get("fundamentals", symbol, _ttl)
+        info = cache.get("eligibility", symbol, _ttl)
         if not info:
             delay = CONFIG["scanner"].get("inter_request_delay", 0.5)
             if delay > 0:
@@ -99,7 +99,7 @@ def _check_single_ticker(symbol):
             ticker = yf.Ticker(symbol)
             info = ticker.info
             if info:
-                cache.set("fundamentals", symbol, info)
+                cache.set("eligibility", symbol, info)
 
         is_eligible, reason = get_eligibility_filters(info)
         if not is_eligible:

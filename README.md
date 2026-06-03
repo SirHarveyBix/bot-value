@@ -125,6 +125,20 @@ Un scan complet (~600 tickers) prend environ **10 à 15 minutes**. Vous recevrez
 
 ---
 
+## Commandes Telegram (depuis votre téléphone)
+
+Une fois le bot lancé en mode scheduler (`python3 main.py`), vous pouvez lui envoyer des commandes directement depuis l'application Telegram :
+
+| Commande  | Description                                            |
+| --------- | ------------------------------------------------------ |
+| `/scan`   | Déclenche un scan immédiat (ignore le calendrier NYSE) |
+| `/status` | Affiche la date et le régime de marché du dernier scan |
+| `/help`   | Liste toutes les commandes disponibles                 |
+
+> **Note** : le bot n'accepte les commandes que depuis votre `TELEGRAM_CHAT_ID` configuré dans `.env`. Les messages d'autres chats sont ignorés.
+
+---
+
 ## Tests unitaires & Qualité du code
 
 ### Lancer les tests
