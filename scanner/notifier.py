@@ -365,7 +365,10 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                 if str(msg.chat.id) != str(chat_id):
                     continue
 
-                text = msg.text.strip().lower().split()[0]
+                parts = msg.text.strip().lower().split()
+                if not parts:
+                    continue
+                text = parts[0]
 
                 if text in ("/scan", "/force"):
                     await send_message_safe(
