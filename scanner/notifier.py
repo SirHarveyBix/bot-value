@@ -328,6 +328,20 @@ async def notify_yfinance_ban() -> None:
 async def notify(top_stocks, top_etfs, market_regime=None, portfolio=None, exits_today=None):
     """Envoi des signaux via Telegram (Asynchrone)."""
     if top_stocks.empty and top_etfs.empty and not exits_today:
+        bot, chat_id = _get_bot()
+        if bot:
+            regime_label = {
+                "panic": "🚨 PANIQUE",
+                "prudence": "⚠️ PRUDENCE",
+                "bear_light": "🐻 BEAR LIGHT",
+                "normal": "✅ NORMAL",
+            }.get(market_regime or "normal", "✅ NORMAL")
+            msg = (
+                f"📊 <b>Scan terminé — aucun signal émis</b>\n"
+                f"Régime : {regime_label}\n"
+                "<i>Tous les tickers ont été exclus par les gates qualité/valorisation.</i>"
+            )
+            await send_message_safe(bot, chat_id, msg, parse_mode="HTML")
         return
     await send_telegram_signals(top_stocks, top_etfs, market_regime, portfolio, exits_today)
 
