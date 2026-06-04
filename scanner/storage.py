@@ -107,10 +107,10 @@ def init_db():
 def get_first_seen_date(conn, symbol: str) -> str | None:
     """Retourne la première date où le ticker est apparu en signal (Lacune 11)."""
     row = conn.execute(
-        "SELECT first_seen_date FROM signals WHERE symbol = ? AND first_seen_date IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT MIN(first_seen_date) FROM signals WHERE symbol = ? AND first_seen_date IS NOT NULL",
         (symbol,),
     ).fetchone()
-    return row[0] if row else None
+    return row[0] if row and row[0] else None
 
 
 async def save_scan_entry(market_data: dict):
@@ -170,7 +170,10 @@ def save_signals_to_db(top_stocks, top_etfs, all_data, universe_size, market_dat
         scan_id = cursor.lastrowid
     except sqlite3.IntegrityError:
         cursor.execute("SELECT id FROM scans WHERE scan_date = ?", (scan_date,))
-        scan_id = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError(f"scan_date {scan_date} introuvable après IntegrityError") from None
+        scan_id = row[0]
         cursor.execute(
             "UPDATE scans SET market_regime = ?, spy_price = ?, spy_ema200 = ?, vix = ?, universe_size = ?, eligible_count = ? WHERE id = ?",
             (market_regime, spy_price, spy_ema200, current_vix, universe_size, len(top_stocks), scan_id),

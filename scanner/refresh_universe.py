@@ -105,7 +105,7 @@ def refresh_from_url(url, column_name="Symbol"):
         tables = pd.read_html(io.StringIO(html))
         for df in tables:
             if column_name in df.columns:
-                return df[column_name].tolist()
+                return [str(t) for t in df[column_name].tolist() if pd.notna(t)]
         return []
     except Exception as e:
         logger.error(f"Erreur extraction URL {url}: {e}")

@@ -142,7 +142,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
         exit_msg = "🚨 <b>SORTIE DE POSITION</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         for ex in exits_today:
             exit_msg += f"❌ <b>{escape_html(ex['name'])}</b> (${escape_html(ex['symbol'])})\n"
-            exit_msg += f"├ Raison: Rang {ex['rank']} (&gt;15) ou Score {ex['score']:.1f}/100 (&lt;70)\n"
+            exit_msg += f"├ Raison: Rang {ex['rank']} (&gt;15) ou Score {ex.get('score') or 0.0:.1f}/100 (&lt;70)\n"
             exit_msg += f"└ Détention consécutive: {ex['days_held']} jours\n\n"
         await send_message_safe(bot, chat_id, truncate_message_html_safe(exit_msg), parse_mode="HTML")
         await asyncio.sleep(1.5)
@@ -162,7 +162,7 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
         raw_symbol = row["symbol"]
         symbol = escape_html(raw_symbol)
         name = escape_html(row.get("name", raw_symbol))
-        score = int(row["score_global"])
+        score = int(row.get("score_global") or 0)
 
         # Détermination du statut de portefeuille pour le ticker
         status_tag = ""
@@ -182,17 +182,20 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
         else:
             msg = f"#{i + 1} 📈 <b>{name}</b> (${symbol})\n"
         msg += f"Score Global : {score}/100\n"
-        msg += f"├ Qualité     : {int(row['score_quality'])}/100\n"
-        msg += f"├ Valorisation: {int(row['score_valuation'])}/100\n"
-        msg += f"└ Momentum    : {int(row['score_momentum'])}/100\n\n"
+        msg += f"├ Qualité     : {int(row.get('score_quality') or 0)}/100\n"
+        msg += f"├ Valorisation: {int(row.get('score_valuation') or 0)}/100\n"
+        msg += f"└ Momentum    : {int(row.get('score_momentum') or 0)}/100\n\n"
 
         msg += f"📈 Perf 6M : {row.get('perf_6m', 0):.1%} vs secteur {row.get('outperf_6m', 0):+.1%}\n"
         msg += f"💰 P/E Fwd : {row.get('pe', 0):.1f} | ROE : {row.get('roe', 0):.1%}\n"
         msg += f"🏢 {escape_html(row.get('sector', 'Unknown'))} | Cap : ${row.get('mcap_b', 0):.1f}B\n"
 
         if row.get("first_seen_date"):
-            days_active = (date.today() - date.fromisoformat(row["first_seen_date"])).days
-            msg += f"⏱️ Signal actif depuis : {days_active} jours\n"
+            try:
+                days_active = (date.today() - date.fromisoformat(row["first_seen_date"])).days
+                msg += f"⏱️ Signal actif depuis : {days_active} jours\n"
+            except ValueError:
+                pass
 
         if row.get("earnings_date"):
             msg += f"📅 Earnings : {escape_html(str(row['earnings_date']))}\n"

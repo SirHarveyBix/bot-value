@@ -78,7 +78,7 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
         }
     except Exception as e:
         logger.error(f"Erreur calcul momentum: {e}")
-        return None
+        return {}
 
 
 def apply_momentum_penalties(score, metrics):

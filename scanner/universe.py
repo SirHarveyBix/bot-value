@@ -26,7 +26,7 @@ EXCLUDED_ETF_PATTERNS = [
 
 def is_eligible_etf(ticker: str, name: str = "") -> bool:
     """Retourne False si l'ETF est à effet de levier ou inverse."""
-    check = name.upper() if name else ticker.upper()
+    check = name.strip().upper() if name and name.strip() else ticker.upper()
     return not any(pat in check for pat in EXCLUDED_ETF_PATTERNS)
 
 

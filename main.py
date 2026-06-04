@@ -68,8 +68,13 @@ async def run_scanner(force=False):
         current_vix = None
 
         if not market_history.empty:
-            spy_close = market_history["Close"]["SPY"]
-            vix_close = market_history["Close"]["^VIX"]
+            try:
+                spy_close = market_history["Close"]["SPY"]
+                vix_close = market_history["Close"]["^VIX"]
+            except KeyError:
+                logger.error("SPY ou ^VIX absent du téléchargement market — scan annulé.")
+                await notify_vix_unavailable()
+                return
 
             spy_valid = spy_close.replace(0, float("nan")).dropna()
             vix_valid = vix_close.replace(0, float("nan")).dropna()
