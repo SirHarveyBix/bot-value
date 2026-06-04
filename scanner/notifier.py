@@ -473,9 +473,68 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                             "/scan — Déclenche un scan immédiat\n"
                             "/status — Affiche le dernier scan\n"
+                            "/aide — Explique le score et les indicateurs\n"
                             "/help — Cette aide"
                         )
                         await send_message_safe(bot, chat_id, help_msg, parse_mode="HTML")
+
+                    elif text == "/aide":
+                        aide1 = (
+                            "📖 <b>ValueMomentum — Guide du score</b>\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            "\n"
+                            "🏆 <b>Score global (0–100)</b>\n"
+                            "Composite de 3 piliers pondérés :\n"
+                            "  • Qualité : 40 %\n"
+                            "  • Momentum : 40 %\n"
+                            "  • Valorisation : 20 %\n"
+                            "\n"
+                            "🔵 <b>Qualité (40 %)</b>\n"
+                            "Mesure la solidité financière de l'entreprise.\n"
+                            "  • <b>ROE 3 ans</b> : rentabilité sur fonds propres moyennée sur 3 ans. Doit être &gt; 0 (obligatoire).\n"
+                            "  • <b>ROIC</b> : retour sur capital investi.\n"
+                            "  • <b>Marge opérationnelle</b> : bénéfice avant intérêts / CA.\n"
+                            "  • <b>FCF Yield</b> : cash disponible / capitalisation boursière.\n"
+                            "  • <b>Dette/EBITDA</b> : levier financier. Exclu si &gt; 6×.\n"
+                        )
+                        await send_message_safe(bot, chat_id, aide1, parse_mode="HTML")
+                        await asyncio.sleep(1.0)
+
+                        aide2 = (
+                            "📈 <b>Momentum (40 %)</b>\n"
+                            "Mesure la dynamique de prix récente.\n"
+                            "  • <b>Perf 6M</b> : performance sur 6 mois (126 séances).\n"
+                            "  • <b>Perf 3M</b> : performance sur 3 mois.\n"
+                            "  • <b>Surperf. secteur</b> : perf du titre vs ETF de son secteur.\n"
+                            "  • <b>Surprise earnings</b> : bonus si l'entreprise a battu les estimations récemment (décroit sur 90j).\n"
+                            "\n"
+                            "💰 <b>Valorisation (20 %)</b>\n"
+                            "Cherche les titres peu chers par rapport à leurs pairs.\n"
+                            "  • <b>P/E forward</b> : prix / bénéfice estimé. Moins = mieux.\n"
+                            "  • <b>EV/EBITDA</b> : valeur entreprise / résultat opérationnel.\n"
+                            "  • <b>PEG</b> : P/E divisé par la croissance attendue.\n"
+                        )
+                        await send_message_safe(bot, chat_id, aide2, parse_mode="HTML")
+                        await asyncio.sleep(1.0)
+
+                        aide3 = (
+                            "🚧 <b>Gates d'exclusion</b>\n"
+                            "Un ticker est exclu s'il échoue l'un de ces critères :\n"
+                            "  • <b>Sanity</b> : variation journalière &gt; +50 % ou &lt; –45 % (split ou erreur de données).\n"
+                            "  • <b>Qualité</b> : ROE &lt; 0, EBITDA ≤ 0, dette/EBITDA &gt; 6×, book value ≤ 0.\n"
+                            "  • <b>Valorisation</b> : P/E &gt; 60 ou négatif sans justification.\n"
+                            "  • <b>Liquidité</b> : cap. boursière &lt; 2 Md$, volume &lt; 5 M$/j, prix &lt; 5$.\n"
+                            "\n"
+                            "🌡 <b>Régimes de marché</b>\n"
+                            "  • ✅ <b>NORMAL</b> : SPY ≥ EMA200 et VIX ≤ 25. Scan complet.\n"
+                            "  • ⚠️ <b>PRUDENCE</b> : SPY &lt; EMA200 et VIX entre 25 et 35. Signaux émis avec avertissement.\n"
+                            "  • 🐻 <b>BEAR LIGHT</b> : SPY &lt; EMA200 et VIX ≤ 25. Scan normal, log interne.\n"
+                            "  • 🚨 <b>PANIQUE</b> : VIX &gt; 35. Scan silencieux — aucun signal émis.\n"
+                            "\n"
+                            "⚖️ <b>Poids suggéré (%)</b>\n"
+                            "Pondération inverse-volatilité sur 63 jours. Les titres moins volatils reçoivent un poids plus élevé pour équilibrer le risque du portefeuille."
+                        )
+                        await send_message_safe(bot, chat_id, aide3, parse_mode="HTML")
 
                 except Exception as e:
                     logger.warning(f"Erreur traitement update {update.update_id}: {e}")
