@@ -53,11 +53,40 @@ Rôle complet : `.agents/roles/lead-dev.md`
 
 ## Workflow de Validation
 
-Tout changement majeur doit être validé par :
+Tout changement majeur doit être validé par les 3 rôles dans cet ordre. Chaque niveau peut **bloquer** la PR.
 
-1. Le **Trader** (pertinence financière).
-2. Le **Lead Dev** (intégrité technique / async).
-3. Le **PO** (conformité architecture funnel).
+### Niveau 1 — Trader Expert (pertinence financière)
+
+**Bloque la PR si** :
+
+- Un seuil de scoring (pondération, gate d'exclusion, exception sectorielle) est modifié sans justification financière documentée dans `.agents/roles/trader.md`
+- Une règle d'exclusion qualité (ROE < 0, BVPS ≤ 0, Dette/EBITDA > 6x) est affaiblie ou supprimée
+- Une exception sectorielle (Financials, Immobilier, Utilities, Biotech) est modifiée sans validation
+- Le Market Gate perd sa priorité VIX-first ou ses 4 niveaux
+
+**Processus** : Remplir le checklist PR dans `.agents/roles/trader.md` et ajouter une entrée dans "Validation Complète des Stratégies".
+
+### Niveau 2 — Lead Developer (intégrité technique)
+
+**Bloque la PR si** :
+
+- `yfinance` est utilisé pour des données fondamentales (autre que `roe_3y` fallback documenté)
+- `shortlist_size` est modifié sans recalcul explicite du budget FMP (30 × 5 = 150 + 25 = 175)
+- Des pondérations sont hardcodées dans le code au lieu d'utiliser `CONFIG["scoring"]["weights"]`
+- Un test réseau ne passe pas par une cassette VCR.py
+- Une logique temporelle sensible (freshness, decay earnings) ne passe pas par Freezegun
+- Le budget FMP est dépassé (plus de 175 appels simulés pour un run complet 30 tickers)
+
+**Processus** : Vérifier la séparation des sources, les tests, et le budget avant d'approuver.
+
+### Niveau 3 — Product Owner (conformité architecture)
+
+**Bloque la PR si** :
+
+- L'architecture en entonnoir Chalutier/Sniper est contournée
+- Des ETFs reçoivent un scoring fondamental (ROE, P/E) au lieu de momentum pur
+- Le pipeline produit des signaux sans données FMP validées (sauf régime Panique)
+- La constitution `.specify/memory/constitution.md` est contredite sans amendement documenté
 
 ---
 

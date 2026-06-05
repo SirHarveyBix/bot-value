@@ -75,3 +75,33 @@ Toute pull request touchant `scanner/scoring/`, `scanner/filters.py`, ou `scanne
 ### Branche feature obligatoire
 
 Ne jamais committer directement sur `main`. Créer une branche : `git checkout -b NNN-nom-de-la-feature`
+
+## Configurable vs Invariants Non-Négociables
+
+**Distinguer ce qui peut être ajusté de ce qui ne peut pas l'être.**
+
+### Configurables via `config.yaml` (modifiable avec validation trader)
+
+| Paramètre                       | Valeur défaut | Plage autorisée |
+| ------------------------------- | ------------- | --------------- |
+| `scoring.weights.quality`       | 0.35          | [0.20, 0.50]    |
+| `scoring.weights.valuation`     | 0.30          | [0.10, 0.40]    |
+| `scoring.weights.momentum`      | 0.35          | [0.20, 0.50]    |
+| `vix_panic_threshold`           | 35            | [30, 45]        |
+| `vix_warning_threshold`         | 25            | [20, 30]        |
+| `max_tickers_per_sector`        | 3             | [1, 10]         |
+| `data_freshness_warning_days`   | 365           | [120, 500]      |
+| `data_freshness_exclusion_days` | 450           | [180, 730]      |
+| `shortlist_sector_cap`          | 5             | [3, 10]         |
+| `exit_rank_threshold`           | 15            | [10, 20]        |
+| `exit_score_threshold`          | 70.0          | [50, 85]        |
+
+### Hardcodés Non-Négociables (ne pas modifier sans audit complet)
+
+| Règle                   | Valeur                         | Raison du blocage                                                     |
+| ----------------------- | ------------------------------ | --------------------------------------------------------------------- |
+| `shortlist_size`        | **30**                         | Budget FMP 175 appels/jour — modifier = recalcul budget obligatoire   |
+| Séparation yfinance/FMP | **yfinance = prix uniquement** | Toute donnée fondamentale depuis yfinance = signal erroné             |
+| Ordre exécution linter  | **ruff avant git add**         | Le hook pre-commit bloque si code non formaté                         |
+| Gates exclusion ROE     | **sur roe_3y brut**            | Le composite est pour le classement — les gates sur composite = biais |
+| Tests réseau            | **VCR.py cassettes**           | Pas d'appels API réels par défaut en tests                            |

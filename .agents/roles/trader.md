@@ -120,6 +120,7 @@ Toute pull request touchant `scanner/scoring/`, `scanner/filters.py`, ou `scanne
 - [ ] Le flag buyback (ROE > 150% + BVPS < 5$) est préservé
 - [ ] EBITDA ≤ 0 et Dette/EBITDA > 6x → exclusion inconditionnelle préservée
 - [ ] Exceptions sectorielles intactes (Financials/Immobilier/Utilities = pas de Dette/EBITDA ; Biotech < 5B$ = gate P/E suspendue)
+- [ ] Si modification du cache `fundamentals` : les valeurs `None` pour `roe_3y` NE DOIVENT PAS être persistées — `roe_3y=None` = retry au scan suivant, pas mise en cache (risque : exclusion permanente de tickers valides)
 
 ### Séparation des Sources
 
@@ -206,5 +207,81 @@ _Dernière mise à jour : 2026-06-05_
 **Verdict** : ✅ Confirmée
 
 **Justification** : Sans plafond, un secteur surperformant (ex. semi-conducteurs en 2023-2024) peut accaparer 15-20 des 30 slots shortlist, privant le Sniper de diversité sectorielle pour le scoring final. 5 tickers/secteur = diversification minimale tout en permettant au secteur dominant d'être représenté.
+
+**Date** : 2026-06-05
+
+---
+
+### Sanity Check Gate (exclusion si variation journalière < -45% ou > +50%)
+
+**Verdict** : ✅ Confirmée
+
+**Justification** : Des variations journalières de cette ampleur ne correspondent pas à des mouvements de marché normaux — elles signalent des stock splits non ajustés, des erreurs de parsing yfinance, ou des suspensions/reprises de cotation. Inclure ces tickers dans le scoring contaminerait les percentiles momentum (une perf 6M de +800% sur un split non ajusté ferait exploser le classement). Seuils choisis conservateurs : -45%/+50% permet de couvrir des journées de crash réelles (Black Monday 1987 : -22% en une séance sur le DJIA) sans faux positifs.
+
+**Implémentation** : `scanner/filters.py::sanity_check_gate()` — appliqué avant le scoring Chalutier.
+
+**Date** : 2026-06-05
+
+---
+
+### Earnings Calendar Check (tag informatif si résultats dans les 14 jours)
+
+**Verdict** : ✅ Confirmée — informatif, non bloquant
+
+**Justification** : Les résultats trimestriels génèrent une volatilité imprévisible (gap de ±15% fréquent) qui peut invalider un signal momentum en quelques heures. Le tag `📅 Earnings à venir` est informatif — il ne bloque pas le signal — car exclure systématiquement ces tickers pénaliserait les entreprises dont les résultats sont attendus comme positifs (et dont la surperformance pré-annonce est précisément ce que le momentum 6M capte). Le trader garde la décision finale. Fenêtre de 14 jours = deux semaines de bourse, durée standard de prudence pré-résultats.
+
+**Implémentation** : `scanner/filters.py::earnings_calendar_check()` — enrichit le signal post-scoring.
+
+**Date** : 2026-06-05
+
+---
+
+### Data Ratio Check (min_valid_data_ratio = 0.60)
+
+**Verdict** : ✅ Confirmée
+
+**Justification** : Si moins de 60% des tickers du batch yfinance retournent des données valides, la shortlist momentum est statistiquement non représentative — on risque de sélectionner les 30 tickers du segment liquide qui a bien fonctionné, pas les 30 meilleurs de l'univers. 60% est le seuil minimal au-dessous duquel le biais de sélection de données biaise le classement (40% d'absences = potentiellement tout un segment de marché manquant). En-dessous de ce seuil, le scan est journalisé mais les signaux sont émis avec le contexte disponible.
+
+**Implémentation** : `scanner/filters.py::check_data_ratio()` — vérifié après le batch yfinance Chalutier.
+
+**Date** : 2026-06-05
+
+---
+
+### Seuils P/E Forward par secteur (50x standard, 80x Tech/Healthcare, gate P/E négatif)
+
+**Verdict** : ✅ Confirmée
+
+**Justification** :
+
+- **50x standard** : Au-delà de 50x bénéfices attendus, le titre est soit en territoire spéculatif, soit le consensus analystes est excessivement optimiste. Pour les secteurs cycliques (Industrials, Energy, Materials), un P/E > 25x est déjà suspect — le seuil de 50x est donc très conservateur pour ces secteurs, mais laisse de la marge pour éviter les faux positifs.
+- **80x Tech/Healthcare** : Les entreprises technologiques à forte croissance (hypercroissance des bénéfices) et les biotechs commerciales peuvent légitimement trader à 60-80x avec des taux de croissance EPS de 30%+. PEG < 2 à P/E 60x = en réalité moins cher qu'un industriel à P/E 20x avec croissance 2%.
+- **Gate P/E négatif suspendue pour Biotech < 5B$** : Les biotechs pré-revenus n'ont pas de bénéfices. Le P/E Forward n'est pas calculable (pertes prévisionnelles). Les exclure systématiquement écarterait des signaux momentum valides sur des pipelines cliniques prometteurs. Le scoring Qualité (ROE absent) les exclut déjà naturellement — la suspension de la gate P/E est cohérente.
+
+**Implémentation** : `scanner/scoring/valuation.py::apply_valuation_gates()`.
+
+**Date** : 2026-06-05
+
+---
+
+### Min Universe Size (min_universe_size = 100 tickers post-éligibilité)
+
+**Verdict** : ✅ Confirmée
+
+**Justification** : Le classement percentile intra-sectoriel et cross-universe n'est statistiquement valide qu'avec un échantillon suffisant. En dessous de 100 tickers éligibles (après filtres Chalutier : liquidité, prix, cotation), la distribution des percentiles est trop étroite pour discriminer — un ticker à ROE de 15% peut se retrouver au 80e percentile dans un univers de 50 tickers alors qu'il serait au 50e dans un univers de 500. Le scan est annulé pour éviter des signaux biaisés.
+
+**Implémentation** : `scanner/filters.py` — vérifié avant la shortlist Sniper. Note critique : la vérification DOIT porter sur l'univers complet post-éligibilité (avant shortlist à 30), pas sur la shortlist elle-même.
+
+**Date** : 2026-06-05
+
+---
+
+### Diversification sectorielle Top 10 (max_tickers_per_sector = 3 par défaut)
+
+**Verdict** : ✅ Confirmée
+
+**Justification** : Un portefeuille Top 10 concentré sur un seul secteur (ex. : 7 technologiques sur 10) expose le capital à un choc sectoriel unique (régulation, cycle, taux). La limite à 3 par secteur est le compromis entre concentration d'alpha (le secteur dominant a les meilleurs scores) et diversification défensive. En "mode alpha-pur" (max=10 dans `config.yaml`), le trader assume consciemment le risque de concentration sectorielle.
+
+**Implémentation** : `scanner/filters.py::filter_post_scoring()`.
 
 **Date** : 2026-06-05

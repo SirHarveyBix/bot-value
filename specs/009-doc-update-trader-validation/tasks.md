@@ -5,6 +5,7 @@
 **Input**: Design documents from `specs/009-doc-update-trader-validation/`
 
 **Références** :
+
 - Spec : `specs/009-doc-update-trader-validation/spec.md`
 - Constitution : `.specify/memory/constitution.md` (v1.3.0)
 - Rôle trader : `.agents/roles/trader.md`
@@ -42,7 +43,7 @@
 - [x] T005 [P] [US1] Mettre à jour `.specify/memory/constitution.md` vers v1.3.0 — corriger fraîcheur données 120/180→365/450, documenter ROE composite, momentum ajusté, inverse-vol, exit rules
 - [x] T006 [P] [US1] Mettre à jour `.specify/templates/plan-template.md` — Constitution Check ligne II (freshness 365/450), ligne V (momentum ajusté volatilité), ligne VII (exit rules), ajouter lignes IX/X/XI
 - [x] T007 [US1] Vérifier `specs/spec.md` — confirmer que ROE composite, momentum ajusté volatilité, poids inverse-vol sont déjà documentés (v1.1) — aucun changement requis
-- [ ] T008 [US1] Ajouter section explicite dans `CLAUDE.md` et `trader.md` distinguant comportements **configurables** (`config.yaml`) vs **hardcodés non-négociables** (shortlist_size=30, séparation yfinance/FMP)
+- [x] T008 [US1] Ajouter section explicite dans `CLAUDE.md` et `trader.md` distinguant comportements **configurables** (`config.yaml`) vs **hardcodés non-négociables** (shortlist_size=30, séparation yfinance/FMP)
 
 **Checkpoint US1** : Zéro divergence entre pondérations documentées et `config.yaml`. Vérifiable par `grep -r "35%\|30%\|40%\|20%" README.md trader.md`.
 
@@ -57,9 +58,9 @@
 ### Implémentation US2
 
 - [x] T009 [P] [US2] Ajouter section "Validation Complète des Stratégies" à `.agents/roles/trader.md` avec entrées pour : ROE composite, momentum ajusté volatilité, inverse-vol, pénalités momentum, Market Gate priorité VIX, fraîcheur données, plafond sectoriel shortlist
-- [ ] T010 [P] [US2] Ajouter entrées de validation manquantes dans `.agents/roles/trader.md` pour : `sanity_check_gate` (-45%/+50% daily return exclusion), `earnings_calendar_check` (fenêtre 14j informatif), `check_data_ratio` (min_valid_data_ratio=0.60)
-- [ ] T011 [P] [US2] Ajouter entrée de validation dans `.agents/roles/trader.md` pour : P/E Forward seuils sectoriels (50x standard, 80x Tech/Healthcare, gate P/E négatif suspendu Biotech < 5B$)
-- [ ] T012 [US2] Vérifier SC-001 : cross-checker `scanner/scoring/` + `scanner/filters.py` vs section "Validation Complète des Stratégies" — confirmer 100% de couverture
+- [x] T010 [P] [US2] Ajouter entrées de validation manquantes dans `.agents/roles/trader.md` pour : `sanity_check_gate` (-45%/+50% daily return exclusion), `earnings_calendar_check` (fenêtre 14j informatif), `check_data_ratio` (min_valid_data_ratio=0.60)
+- [x] T011 [P] [US2] Ajouter entrée de validation dans `.agents/roles/trader.md` pour : P/E Forward seuils sectoriels (50x standard, 80x Tech/Healthcare, gate P/E négatif suspendu Biotech < 5B$)
+- [x] T012 [US2] Vérifier SC-001 : cross-checker `scanner/scoring/` + `scanner/filters.py` vs section "Validation Complète des Stratégies" — confirmer 100% de couverture (13/13 stratégies documentées)
 
 **Checkpoint US2** : Chaque fonction de `scanner/scoring/` et `scanner/filters.py` qui implémente une règle métier a son entrée dans `trader.md`.
 
@@ -75,7 +76,7 @@
 
 - [x] T013 [P] [US3] Ajouter section "Règles Anti-Régressions" à `CLAUDE.md` — séparation yfinance/FMP, budget FMP, interdiction hardcoding pondérations, table des gates d'exclusion, checklist trader avant merge, branche obligatoire
 - [x] T014 [P] [US3] Ajouter Principe XI à `.specify/memory/constitution.md` — invariants anti-régressions pour agents IA
-- [ ] T015 [US3] Mettre à jour `AGENTS.md` — enrichir section "Workflow de Validation" avec critères de blocage explicites par niveau (Trader : pertinence financière — bloque si seuil/pondération modifié sans justification ; Lead Dev : intégrité technique — bloque si budget FMP dépassé ou séparation yfinance/FMP violée ; PO : conformité architecture — bloque si entonnoir Chalutier/Sniper altéré)
+- [x] T015 [US3] Mettre à jour `AGENTS.md` — enrichir section "Workflow de Validation" avec critères de blocage explicites par niveau (Trader : pertinence financière — bloque si seuil/pondération modifié sans justification ; Lead Dev : intégrité technique — bloque si budget FMP dépassé ou séparation yfinance/FMP violée ; PO : conformité architecture — bloque si entonnoir Chalutier/Sniper altéré)
 
 **Checkpoint US3** : `AGENTS.md` et `CLAUDE.md` donnent à un agent les informations suffisantes pour éviter les 7 classes de bugs récurrents (voir historique git).
 
@@ -90,7 +91,7 @@
 ### Implémentation US4
 
 - [x] T016 [US4] Ajouter "Checklist de Validation PR" à `.agents/roles/trader.md` — 5 sections : pondérations/configuration, gates/exclusions, séparation des sources, market gate, justification financière
-- [ ] T017 [US4] Vérifier que le checklist PR dans `trader.md` couvre explicitement les cas révélés par les bugs récurrents : hardcoding pondérations, yfinance pour données fondamentales, shortlist_size modifié sans recalcul budget, gate ROE sur composite vs brut
+- [x] T017 [US4] Vérifier que le checklist PR dans `trader.md` couvre explicitement les cas révélés par les bugs récurrents : hardcoding pondérations, yfinance pour données fondamentales, shortlist_size modifié sans recalcul budget, gate ROE sur composite vs brut — ajouté item cache `roe_3y=None`
 
 **Checkpoint US4** : Le checklist peut être copié-collé directement dans une description de PR sans modification.
 
@@ -100,9 +101,9 @@
 
 **Objectif** : Validation croisée de cohérence sur l'ensemble des documents.
 
-- [ ] T018 [P] Vérification SC-002 : `grep -r "quality.*0\.\|momentum.*0\.\|valuation.*0\." README.md trader.md constitution.md` — confirmer cohérence avec `config.yaml` (Qualité 0.35, Valorisation 0.30, Momentum 0.35)
-- [ ] T019 [P] Vérification FR-008 : Confirmer que `CLAUDE.md` et `trader.md` distinguent explicitement les constantes configurables (`config.yaml`) des invariants hardcodés (shortlist_size, séparation yfinance/FMP, ruff pre-commit)
-- [ ] T020 Vérification finale des 8 FR : passer chaque FR-001 à FR-008 et confirmer implémenté ou documenter gap restant
+- [x] T018 [P] Vérification SC-002 : pondérations cohérentes README (35%/30%/35%) + trader.md (35%/30%/35%) + config.yaml (0.35/0.30/0.35) — ✅ zéro divergence
+- [x] T019 [P] Vérification FR-008 : `CLAUDE.md` contient table "Configurable vs Invariants Non-Négociables" — ✅ implémenté
+- [x] T020 Vérification finale des 8 FR : FR-001 à FR-008 tous ✅ satisfaits
 
 ---
 
@@ -164,9 +165,9 @@ T011: P/E seuils sectoriels + exception Biotech → .agents/roles/trader.md
 ## Statut
 
 **Session 2026-06-05** :
-- Tâches complétées : T001–T009, T013, T014, T016 (15 tâches)
-- Tâches restantes : T008, T010, T011, T012, T015, T017, T018, T019, T020 (9 tâches)
-- Blocage : Aucun — toutes les tâches restantes sont indépendantes
+
+- Tâches complétées : T001–T020 (20/20) ✅ TOUTES COMPLÉTÉES
+- Blocage : Aucun
 
 ---
 

@@ -7,17 +7,18 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 ## Sommaire
 
 1. [Stratégie](#stratégie)
-2. [Prérequis](#prérequis)
-3. [Installation](#installation)
-4. [Configuration](#configuration)
-5. [Test rapide](#test-rapide)
-6. [Tests unitaires & Qualité du code](#tests-unitaires--qualité-du-code)
-7. [Mode production (24/7)](#mode-production-247)
-8. [Déploiement Mac Mini (production complète)](#déploiement-mac-mini-production-complète)
-9. [Gestion de l'univers de tickers](#gestion-de-lunivers-de-tickers)
-10. [Dashboard Web](#dashboard-web)
-11. [Logs](#logs)
-12. [Structure des fichiers](#structure-des-fichiers)
+2. [Ce que vous recevez](#ce-que-vous-recevez)
+3. [Prérequis](#prérequis)
+4. [Installation](#installation)
+5. [Configuration](#configuration)
+6. [Test rapide](#test-rapide)
+7. [Tests unitaires & Qualité du code](#tests-unitaires--qualité-du-code)
+8. [Mode production (24/7)](#mode-production-247)
+9. [Déploiement Mac Mini (production complète)](#déploiement-mac-mini-production-complète)
+10. [Gestion de l'univers de tickers](#gestion-de-lunivers-de-tickers)
+11. [Dashboard Web](#dashboard-web)
+12. [Logs](#logs)
+13. [Structure des fichiers](#structure-des-fichiers)
 
 ---
 
@@ -32,6 +33,139 @@ Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'ag
   - Étape 1 (Chalutier) : screening technique massif sur l'univers complet via yfinance (gratuit) + plafond sectoriel 5 tickers/secteur.
   - Étape 2 (Sniper) : analyse fondamentale institutionnelle via FMP API sur une shortlist de 30 tickers (limite stricte 175 appels/jour).
   - Signaux : Top 10 actions avec pondération inverse-volatilité suggérée + Top 5 ETFs de rotation sectorielle.
+
+---
+
+## Ce que vous recevez
+
+Chaque jour de bourse à 09h35 ET (heure de New York), le bot envoie une série de messages Telegram. Voici comment les lire.
+
+---
+
+### Le régime de marché (en tête de message)
+
+Avant tout signal, le bot indique l'état du marché :
+
+| Indicateur        | Signification                                                     | Action suggérée                                                     |
+| ----------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
+| ✅ **NORMAL**     | Marché haussier (SPY au-dessus de sa moyenne 200 jours, VIX < 25) | Signaux fiables, fonctionnement standard                            |
+| 🐻 **BEAR LIGHT** | SPY sous sa moyenne 200 jours, mais panique absente (VIX < 25)    | Signaux émis, vigilance accrue conseillée                           |
+| ⚠️ **PRUDENCE**   | Tension visible (VIX entre 25 et 35)                              | Signaux émis avec avertissement — réduire les positions si possible |
+| 🚨 **PANIQUE**    | VIX > 35 — crise systémique en cours                              | **Aucun signal émis.** Alerte uniquement. Ne rien acheter.          |
+
+> Le VIX (indice de volatilité) est le thermomètre de la peur sur les marchés américains. Un VIX > 35 correspond à des crises comme mars 2020 (COVID) ou octobre 2008 (Lehman).
+
+---
+
+### Les signaux d'actions (Top 10)
+
+Pour chaque action du Top 10, vous recevez un message de ce type :
+
+```
+#1
+🚀 ACHAT (Nouveau signal)
+📈 Apple Inc. ($AAPL)
+Score Global : 87/100
+├ Qualité     : 91/100
+├ Valorisation: 72/100
+└ Momentum    : 88/100
+
+📈 Perf 6M : +18.4% vs secteur +5.2%
+💰 P/E Fwd : 28.3 | ROE : 41.2%
+🏢 Technology | Cap : $2850.0B
+⏱️ Signal actif depuis : 12 jours
+🔗 Yahoo Finance
+```
+
+**Ce que chaque ligne signifie :**
+
+- **Score Global /100** : Note synthétique combinant les 3 piliers. Au-dessus de 75 = signal solide. En dessous de 60 = signal faible, présent uniquement par faute de mieux.
+- **Qualité /100** : L'entreprise génère-t-elle des profits durables ? Calculé à partir du ROE (Retour sur Capitaux Propres) sur 3 ans, des marges opérationnelles, et du niveau d'endettement. Score > 80 = entreprise avec un avantage compétitif durable.
+- **Valorisation /100** : L'action est-elle abordable par rapport à ses bénéfices attendus ? Calculé à partir du P/E Forward (prix divisé par les bénéfices prévus), de l'EV/EBITDA, et du PEG. Score > 70 = relativement bon marché dans son secteur.
+- **Momentum /100** : Le marché commence-t-il à acheter cette action ? Calculé à partir de la performance sur 6 mois ajustée à la volatilité, et de la surperformance vs les autres entreprises du même secteur. Score > 75 = flux institutionnels en accélération visible.
+- **Perf 6M / vs secteur** : La performance de l'action sur 6 mois, et l'écart avec son secteur (positif = surperforme ses concurrents du même secteur).
+- **P/E Fwd** : Combien d'années de bénéfices attendus vous payez. P/E de 28 = vous payez 28 fois les bénéfices prévus pour l'année suivante. À comparer uniquement dans le même secteur (Tech à 35x est normal, Industrie à 35x est cher).
+- **ROE** : Le pourcentage de profit que l'entreprise génère sur les capitaux propres. ROE de 41% = pour 100€ investis par les actionnaires, l'entreprise génère 41€ de profit par an. Au-dessus de 15% est considéré excellent.
+- **Cap** : La capitalisation boursière en milliards de dollars. Le bot ne couvre que les entreprises au-dessus de 2 milliards de dollars (liquidité institutionnelle minimale).
+
+**Les statuts de position :**
+
+| Statut                       | Signification                                                |
+| ---------------------------- | ------------------------------------------------------------ |
+| 🚀 **ACHAT**                 | Nouveau signal, apparu aujourd'hui pour la première fois     |
+| ⏳ **MATURATION** (Jour X/3) | Signal de 2 ou 3 jours — en phase de confirmation avant HOLD |
+| 🟢 **HOLD** (X jours)        | Signal confirmé, présent depuis plus de 3 jours consécutifs  |
+
+**Les avertissements possibles :**
+
+- `📅 Earnings : 2026-06-15` — Des résultats trimestriels sont attendus dans moins de 14 jours. Le cours peut bouger fortement dans les deux sens le jour de la publication. Informatif uniquement — le bot ne bloque pas le signal.
+- `⚠️ ROE possiblement gonflé par buybacks` — L'entreprise a massivement racheté ses propres actions, ce qui peut artificiellement élever le ROE. Le signal reste valide mais la qualité est à vérifier manuellement.
+- `⚠️ données potentiellement périmées` — Les données financières datent de plus d'un an. Le signal est conservé mais les fondamentaux peuvent avoir changé depuis.
+
+---
+
+### Les sorties de position (🚨 SORTIE)
+
+Si une action quitte votre Top 10, un message séparé est envoyé **avant** les signaux du jour :
+
+```
+🚨 SORTIE DE POSITION
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ Microsoft Corp. ($MSFT)
+├ Raison: Rang 16 (>15) ou Score 68/100 (<70)
+└ Détention consécutive: 47 jours
+```
+
+Cela signifie que l'action a glissé hors du Top 15 **ou** que son score global est passé sous 70/100. Ce n'est pas une vente automatique — c'est une information : la conviction du modèle sur ce titre a diminué. À vous de décider si vous souhaitez réduire ou conserver votre position.
+
+---
+
+### Les signaux d'ETF (Top 5)
+
+```
+#1 XLK — Technology Select Sector SPDR Fund
+Score : 84/100
+Perf 6M : +22.1% | vs SPY : +8.4%
+🔗 Yahoo Finance — Technology Select Sector SPDR Fund
+```
+
+**Important : les ETFs ne sont pas des recommandations d'achat d'ETF.** Ce sont des indicateurs de **rotation sectorielle** — ils vous indiquent quels secteurs ont le momentum le plus fort en ce moment sur les marchés américains.
+
+- **XLK** = Technologie, **XLV** = Santé, **XLF** = Finance, **XLE** = Énergie, **XLI** = Industrie, **XLB** = Matériaux, **XLRE** = Immobilier, **XLU** = Services aux collectivités, **XLC** = Communication, **XLP** = Consommation défensive, **XLY** = Consommation cyclique.
+- Si XLK domine le Top ETFs depuis plusieurs semaines, le secteur technologique bénéficie des flux institutionnels en ce moment.
+- Utilisez cette information pour **renforcer la conviction** sur les signaux actions : une action technologique dans le Top 10 est d'autant plus convaincante si XLK est aussi en tête des ETFs.
+
+> Les ETFs sont scorés uniquement sur leur momentum (performance 6 mois vs SPY). Ils n'ont pas de score de Qualité ni de Valorisation — comparer leur score avec celui des actions n'a pas de sens.
+
+---
+
+### Le message épinglé (résumé permanent)
+
+Après chaque scan, un message est **épinglé** en haut de votre conversation Telegram. Il remplace automatiquement le précédent et donne un coup d'œil immédiat :
+
+```
+📌 ValueMomentum — 2026-06-05
+Régime : ✅ NORMAL
+━━━━━━━━━━━━━━━━━━━━━━━━
+🏆 Top stocks
+  1. AAPL — 87/100 | Perf 6M +18.4%
+  2. MSFT — 84/100 | Perf 6M +15.2%
+  ...
+📦 Top ETFs
+  1. XLK — 82/100
+  2. XLV — 78/100
+━━━━━━━━━━━━━━━━━━━━━━━━
+Commandes : /scan /status /help
+```
+
+---
+
+### Ce que le bot ne fait pas
+
+- Il **ne passe pas d'ordres** et ne se connecte à aucun compte de courtier.
+- Il **ne garantit aucune performance** — les signaux sont basés sur des données historiques et des modèles quantitatifs. Les marchés peuvent contredire n'importe quel modèle.
+- Il **n'adapte pas les signaux à votre profil de risque** — à vous de décider la taille de chaque position selon votre tolérance au risque.
+- L'horizon cible est **3 à 6 mois** — ce n'est pas un outil de day trading. Les signaux peuvent mettre des semaines à se matérialiser.
 
 ---
 
