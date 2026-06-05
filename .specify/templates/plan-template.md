@@ -41,14 +41,17 @@
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
 - [ ] **I. Funnel Architecture**: Chalutier/Sniper separation respected? FMP-only for fundamentals? No yfinance fallback for balance sheet data? ETF pipeline momentum-only (not value — sector rotation framing)?
-- [ ] **II. Quality & Stability**: ROE 3Y from FMP (no TTM fallback)? book_value_per_share gates (≤ 0 → exclude; ROE > 150% + BVS < $5 → cap percentile 80)? Utilities/Financials/REITs excluded from debt/EBITDA? Data freshness flags (120d warn, 180d exclude)?
+- [ ] **II. Quality & Stability**: ROE composite formula (0.6 × ROE_3y + 0.4 × ROIC_TTM) used? ROE gate on raw roe_3y (not composite)? book_value_per_share gates (≤ 0 → exclude; ROE > 150% + BVS < $5 → cap percentile 80)? Utilities/Financials/REITs excluded from debt/EBITDA? Data freshness flags (365d warn, 450d exclude — config.yaml)?
 - [ ] **III. Market Gate**: 4-level priority cascade intact (Panic VIX > 35 → Caution → Bear Light → Normal)? VIX evaluated before EMA200?
 - [ ] **IV. Institutional Liquidity**: Cap > $2B, Dollar Vol > $5M (20d avg), Price > $5, NYSE/NASDAQ/AMEX only?
-- [ ] **V. Quantitative Momentum**: 5 sub-criteria (6M perf, 6M sector outperformance, 3M perf, Earnings Surprise with 90d linear decay, Analyst revision 3M)? Anti-extreme penalties (+25% / -20% on 1M)?
+- [ ] **V. Quantitative Momentum**: 5 sub-criteria (6M perf with volatility-adjusted rank Daniel & Moskowitz 2016, 6M sector outperformance, 3M perf, Earnings Surprise with 90d linear decay, Analyst revision 3M)? Anti-extreme penalties (+25% / -20% on 1M)?
 - [ ] **VI. Sector GICS Integrity**: sector=None → excluded (sector_missing log)? Sectors < 3 tickers → cross-universe fallback? MIN_UNIVERSE_SIZE=100 checked on the full post-eligibility universe (not the 30-ticker shortlist)?
-- [ ] **VII. Signal Persistence**: first_seen_date never reset on reappearance? Top 10 exit by score only (not by calendar rotation)?
+- [ ] **VII. Signal Persistence**: first_seen_date never reset on reappearance? Top 10 exit by score only (not by calendar rotation)? Portfolio exit rules respected (exit_rank_threshold=15, exit_score_threshold=70)? Maturation cycle (ACHAT → MATURATION 3j → HOLD)?
 - [ ] **Technical Standards**: SQLite WAL, APScheduler 4.x async, jitter 0.8–1.5s, FMP 2 retries max, html.escape(), 4096-char truncation?
 - [ ] **Quality Gates**: VCR.py cassettes for all network tests? Freezegun for all time-sensitive logic?
+- [ ] **IX. No Abbreviations**: Variable and function names fully descriptive? No cryptic abbreviations (sq, mv, tmp, val, res)? Standard financial acronyms (ROE, VIX, EMA, FMP, OHLCV) still permitted.
+- [ ] **X. Trader Validation**: Any modification to scoring weights, exclusion gates, or sectoral exceptions has a documented trader validation in `.agents/roles/trader.md`?
+- [ ] **XI. Anti-Regression**: yfinance price-only separation respected? shortlist_size=30 unchanged? Weights modified only via config.yaml? Feature branch (not main)?
 
 ## Project Structure
 
