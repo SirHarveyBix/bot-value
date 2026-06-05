@@ -25,11 +25,13 @@ Scanner quantitatif quotidien pour identifier des opportunités d'investissement
 
 Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'agit pas de day trading.
 
-- **Philosophie** : Acheter des entreprises exceptionnelles (ROE stable sur 3 ans) au moment où le marché commence à les réévaluer à la hausse (Surprise Earnings + Momentum 6M).
-- **Gestion du risque** : Market Gate automatique (SPY > EMA 200 + VIX < 25). En régime de panique (VIX > 35), le bot envoie une alerte et n'émet aucun signal.
+- **Philosophie** : Acheter des entreprises structurellement excellentes (ROE/ROIC composite stable sur 3 ans) au moment exact où le flux institutionnel valide la réévaluation (Momentum 6M ajusté à la volatilité + Surprise Résultats).
+- **Scoring** : 3 piliers pondérés — Qualité 35% (ROE/ROIC composite, marge, FCF), Valorisation 30% (P/E Forward, EV/EBITDA, PEG), Momentum 35% (performance ajustée à la volatilité, surperformance sectorielle).
+- **Gestion du risque** : Market Gate automatique à 4 niveaux (priorité VIX sur EMA200). En régime de panique (VIX > 35), le bot envoie une alerte et n'émet aucun signal.
 - **Pipeline** :
-  - Étape 1 (Chalutier) : screening technique massif sur l'univers complet via yfinance (gratuit).
-  - Étape 2 (Sniper) : analyse fondamentale institutionnelle via FMP API sur une shortlist de 30 tickers.
+  - Étape 1 (Chalutier) : screening technique massif sur l'univers complet via yfinance (gratuit) + plafond sectoriel 5 tickers/secteur.
+  - Étape 2 (Sniper) : analyse fondamentale institutionnelle via FMP API sur une shortlist de 30 tickers (limite stricte 175 appels/jour).
+  - Signaux : Top 10 actions avec pondération inverse-volatilité suggérée + Top 5 ETFs de rotation sectorielle.
 
 ---
 
@@ -38,7 +40,7 @@ Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'ag
 - **macOS** (optimisé Mac Mini, mais fonctionne sur tout Mac)
 - **Python 3.11+** — vérifiez avec `python3 --version`
 - **Git** — pour cloner le projet
-- **Compte Financial Modeling Prep** (gratuit) — limite nominale 250 appels/jour, disjoncteur hard limit à 245
+- **Compte Financial Modeling Prep** (gratuit) — limite nominale 250 appels/jour, disjoncteur hard limit à 175 (30 tickers × 5 endpoints + marge retry)
 - **Bot Telegram** — pour recevoir les alertes
 
 ---

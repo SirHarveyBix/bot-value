@@ -16,10 +16,10 @@ Principes ajoutés :
 Templates mis à jour :
 - ✅ .specify/memory/constitution.md (ce fichier)
 - ✅ .specify/templates/plan-template.md — Constitution Check ligne II corrigée (freshness 365/450)
-- ⏳ .agents/roles/trader.md — ajouter section "Validation Complète des Stratégies" + checklist PR
-- ⏳ CLAUDE.md — ajouter section "Règles Anti-Régressions"
-- ⏳ README.md — aligner pondérations avec config.yaml
-- ⏳ specs/contracts/spec.md — documenter ROE composite, momentum ajusté volatilité, poids inverse-vol
+- ✅ .agents/roles/trader.md — section "Validation Complète des Stratégies" + checklist PR + formules v1.1
+- ✅ CLAUDE.md — section "Règles Anti-Régressions" ajoutée
+- ✅ README.md — pondérations alignées, budget FMP corrigé (175), pipeline v1.1 documenté
+- ✅ specs/spec.md — déjà à jour (ROE composite, momentum ajusté, inverse-vol documentés en v1.1)
 
 Constants ajoutées :
 - exit_rank_threshold (15), exit_score_threshold (70.0), maturation_days (3), earnings_window_days (14)
