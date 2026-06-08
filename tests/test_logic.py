@@ -581,17 +581,17 @@ def test_analyst_revision_computation():
 
 @freeze_time("2026-05-19")
 def test_data_freshness_stale():
-    """mostRecentQuarter vieux de 451j (bilan annuel vraiment stale) → is_fresh=False."""
-    stale_ts = (datetime(2026, 5, 19) - timedelta(days=451)).timestamp()
+    """mostRecentQuarter vieux de 701j (données vraiment stale > 700j) → is_fresh=False."""
+    stale_ts = (datetime(2026, 5, 19) - timedelta(days=701)).timestamp()
     is_fresh, _, reason = data_freshness_check({"mostRecentQuarter": stale_ts})
     assert not is_fresh
-    assert "451" in reason
+    assert "701" in reason
 
 
 @freeze_time("2026-05-19")
 def test_data_freshness_warning():
-    """mostRecentQuarter vieux de 400j (bilan annuel > 1 an) → is_fresh=True, has_warning=True."""
-    warn_ts = (datetime(2026, 5, 19) - timedelta(days=400)).timestamp()
+    """mostRecentQuarter vieux de 600j (bilan annuel > 15 mois) → is_fresh=True, has_warning=True."""
+    warn_ts = (datetime(2026, 5, 19) - timedelta(days=600)).timestamp()
     is_fresh, has_warning, _ = data_freshness_check({"mostRecentQuarter": warn_ts})
     assert is_fresh
     assert has_warning

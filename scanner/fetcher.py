@@ -289,11 +289,20 @@ async def fetch_fmp_data(client, symbol):
         return None
 
     try:
-        r_data = responses[0].json()
-        k_data = responses[1].json()
-        p_data = responses[2].json()
-        is_data = responses[3].json()
-        bs_data = responses[4].json()
+        parsed = []
+        for resp in responses:
+            body = resp.text.strip()
+            if not body:
+                parsed.append(None)
+                continue
+            data = resp.json()
+            # FMP retourne {"Error Message": "..."} ou [{"Error Message": "..."}] quand quota/auth échoue
+            err_item = data[0] if isinstance(data, list) and data else data
+            if isinstance(err_item, dict) and "Error Message" in err_item:
+                raise FMPUnavailableError(f"FMP quota/auth: {err_item['Error Message']}")
+            parsed.append(data)
+
+        r_data, k_data, p_data, is_data, bs_data = parsed
 
         if not (r_data and k_data and p_data):
             return None
