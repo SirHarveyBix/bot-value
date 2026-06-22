@@ -627,7 +627,8 @@ def test_check_batch_data_ratio_pass():
     tickers = [f"T{i}" for i in range(7)]
     cols = pd.MultiIndex.from_tuples([(t, "Close") for t in tickers])
     df = pd.DataFrame(columns=cols)
-    assert check_batch_data_ratio(df, 10)
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
+        assert check_batch_data_ratio(df, 10)
 
 
 def test_check_batch_data_ratio_fail():
@@ -635,7 +636,8 @@ def test_check_batch_data_ratio_fail():
     tickers = [f"T{i}" for i in range(5)]
     cols = pd.MultiIndex.from_tuples([(t, "Close") for t in tickers])
     df = pd.DataFrame(columns=cols)
-    assert not check_batch_data_ratio(df, 10)
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
+        assert not check_batch_data_ratio(df, 10)
 
 
 def test_check_batch_data_ratio_zero_eligible():
@@ -1602,5 +1604,6 @@ def test_check_batch_data_ratio_no_ghost_levels():
     combined = pd.concat([df1, df2], axis=1)
 
     assert len(combined.columns.get_level_values(0).unique()) == 3
-    assert check_batch_data_ratio(combined, 4)  # 3/4 = 0.75 ≥ 0.60
-    assert not check_batch_data_ratio(combined, 6)  # 3/6 = 0.50 < 0.60
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
+        assert check_batch_data_ratio(combined, 4)  # 3/4 = 0.75 ≥ 0.60
+        assert not check_batch_data_ratio(combined, 6)  # 3/6 = 0.50 < 0.60
