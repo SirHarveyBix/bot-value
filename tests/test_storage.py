@@ -142,3 +142,82 @@ def test_get_first_seen_dates_batch_empty_list(tmp_path):
         result = get_first_seen_dates_batch([], "2026-06-04")
 
     assert result == {}
+
+
+# ── export_signals_json : copie dans web/ ────────────────────────────────────
+
+
+def test_export_signals_json_copies_to_web(tmp_path):
+    """export_signals_json écrit dans data/signals/ ET dans web/."""
+
+    data_dir = tmp_path / "data" / "signals"
+    data_dir.mkdir(parents=True)
+
+    with (
+        patch("scanner.storage.JSON_PATH", str(data_dir / "signals_latest.json")),
+        patch("scanner.storage.os.makedirs"),
+    ):
+        # Patch open pour capturer les deux écritures
+        written_paths = []
+        original_open = open
+
+        def mock_open(path, mode="r", **kwargs):
+            if mode == "w" and "signals_latest" in str(path):
+                written_paths.append(str(path))
+            return original_open(path, mode, **kwargs)
+
+        from scanner.storage import export_signals_json
+
+        with patch("builtins.open", side_effect=mock_open):
+            export_signals_json(pd.DataFrame(), pd.DataFrame(), 500)
+
+    assert any("web" in p for p in written_paths), f"web/ non écrit. Paths: {written_paths}"
+    assert any("data" in p and "signals" in p for p in written_paths), "data/signals/ non écrit"
+
+
+def test_export_signals_json_includes_insider_buy_fields(tmp_path):
+    """Le JSON exporté contient insider_buy_value et insider_buy_date si présents."""
+    import json
+
+    data_dir = tmp_path / "data" / "signals"
+    data_dir.mkdir(parents=True)
+    json_path = str(data_dir / "signals_latest.json")
+
+    stock = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "name": "Apple",
+                "sector": "Technology",
+                "score_global": 85.0,
+                "score_quality": 80.0,
+                "score_valuation": 75.0,
+                "score_momentum": 90.0,
+                "pe": 25.0,
+                "roe": 0.35,
+                "perf_6m": 0.15,
+                "mcap_b": 2800.0,
+                "quality_flags": [],
+                "first_seen_date": "2026-06-01",
+                "insider_buy_value": 250_000.0,
+                "insider_buy_date": "2026-06-15",
+                "suggested_weight_pct": 12.5,
+            }
+        ]
+    )
+
+    with (
+        patch("scanner.storage.JSON_PATH", json_path),
+        patch(
+            "scanner.storage.os.makedirs",
+        ),
+    ):
+        from scanner.storage import export_signals_json
+
+        export_signals_json(stock, pd.DataFrame(), 500)
+
+    with open(json_path) as f:
+        data = json.load(f)
+
+    assert data["top_stocks"][0]["insider_buy_value"] == 250_000.0
+    assert data["top_stocks"][0]["insider_buy_date"] == "2026-06-15"

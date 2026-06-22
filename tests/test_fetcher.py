@@ -172,3 +172,78 @@ async def test_fmp_raises_unavailable_when_api_key_is_placeholder():
             await fetch_fmp_data(AsyncMock(), "AAPL")
 
     fetcher_mod.fmp_call_counter = saved
+
+
+# ── fetch_insider_buying ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_insider_buying_returns_none_when_key_absent():
+    """fetch_insider_buying retourne None si clé FMP absente."""
+    from scanner.fetcher import fetch_insider_buying
+
+    with patch.dict(
+        "scanner.fetcher.CONFIG",
+        {"scanner": {"fmp_api_key": None, "fmp_base_url": "https://fmp", "insider_buy_days": 90}},
+    ):
+        result = await fetch_insider_buying(AsyncMock(), "AAPL")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_insider_buying_returns_none_when_no_recent_purchases():
+    """Aucun achat dans la fenêtre de 90j → None."""
+    from datetime import date, timedelta
+    from unittest.mock import MagicMock
+
+    from scanner.fetcher import fetch_insider_buying
+
+    old_date = (date.today() - timedelta(days=120)).isoformat()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [{"transactionDate": old_date, "value": 100_000}]
+
+    async def fake_fmp_get(client, url):
+        return mock_resp
+
+    mock_client = AsyncMock()
+    with patch("scanner.fetcher._fmp_get", side_effect=fake_fmp_get):
+        with patch.dict(
+            "scanner.fetcher.CONFIG",
+            {"scanner": {"fmp_api_key": "testkey", "fmp_base_url": "https://fmp", "insider_buy_days": 90}},
+        ):
+            result = await fetch_insider_buying(mock_client, "AAPL")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_insider_buying_aggregates_recent_purchases():
+    """Achats dans les 90 derniers jours → total_value et transaction_count corrects."""
+    from datetime import date, timedelta
+    from unittest.mock import MagicMock
+
+    from scanner.fetcher import fetch_insider_buying
+
+    recent_date = (date.today() - timedelta(days=10)).isoformat()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [
+        {"transactionDate": recent_date, "value": 200_000},
+        {"transactionDate": recent_date, "value": 100_000},
+    ]
+
+    async def fake_fmp_get(client, url):
+        return mock_resp
+
+    mock_client = AsyncMock()
+    with patch("scanner.fetcher._fmp_get", side_effect=fake_fmp_get):
+        with patch.dict(
+            "scanner.fetcher.CONFIG",
+            {"scanner": {"fmp_api_key": "testkey", "fmp_base_url": "https://fmp", "insider_buy_days": 90}},
+        ):
+            result = await fetch_insider_buying(mock_client, "AAPL")
+
+    assert result is not None
+    assert result["total_value"] == 300_000
+    assert result["transaction_count"] == 2
+    assert result["most_recent_date"] == recent_date

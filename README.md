@@ -313,25 +313,34 @@ L'univers par défaut (`data/universe/tickers_universe.json`) contient ~40 ticke
 
 ### Étape obligatoire avant le premier scan réel
 
+**Option recommandée — FMP Screener dynamique (v1.3.0+)**
+
+Découvre automatiquement tous les titres US (NYSE/NASDAQ) répondant aux critères de liquidité (cap > 2B$, volume > 5M$/j). Non limité aux indices connus, inclut les mid-caps hors S&P 500.
+
 ```bash
 source venv/bin/activate
-pip install -r requirements.txt   # s'assure que lxml est installé
+PYTHONPATH=. python3 scanner/refresh_universe.py screener   # ~800-1500 tickers via FMP API
+```
 
+**Option fallback — Sources Wikipedia statiques**
+
+```bash
 PYTHONPATH=. python3 scanner/refresh_universe.py sp500      # ~503 tickers S&P 500
 PYTHONPATH=. python3 scanner/refresh_universe.py nasdaq100  # +100 tickers Nasdaq
 ```
 
-Après cette étape, l'univers contient ~600 tickers et le scanner peut démarrer normalement.
+Après cette étape, l'univers contient suffisamment de tickers pour démarrer.
 
 ### Sources disponibles
 
-| Commande    | Source                 | Tickers            |
-| ----------- | ---------------------- | ------------------ |
-| `sp500`     | Wikipedia — S&P 500    | ~503               |
-| `nasdaq100` | Wikipedia — Nasdaq-100 | ~100               |
-| `india`     | Wikipedia — NIFTY 50   | 50 (suffixe `.NS`) |
+| Commande    | Source                         | Tickers                 |
+| ----------- | ------------------------------ | ----------------------- |
+| `screener`  | FMP Stock Screener (dynamique) | ~800–1500 ⭐ recommandé |
+| `sp500`     | Wikipedia — S&P 500            | ~503                    |
+| `nasdaq100` | Wikipedia — Nasdaq-100         | ~100                    |
+| `india`     | Wikipedia — NIFTY 50           | 50 (suffixe `.NS`)      |
 
-> Un scan complet sur 600+ tickers prend **10 à 15 minutes** (délais volontaires entre chunks yfinance pour éviter le ban IP).
+> Un scan complet sur 800+ tickers prend **10 à 20 minutes** (délais volontaires entre chunks yfinance pour éviter le ban IP).
 
 ---
 
@@ -343,12 +352,14 @@ Le dashboard est accessible à :
 http://localhost:8080/
 ```
 
-Il est démarré automatiquement par supervisord. Pour le lancer manuellement :
+Il affiche le Top 10 actions avec scores, poids suggérés, régime de marché et signal insider buying (🏦). Il est démarré automatiquement par supervisord. Pour le lancer manuellement :
 
 ```bash
 source venv/bin/activate
 python3 -m http.server 8080 --directory web
 ```
+
+Les données (`signals_latest.json`) sont copiées automatiquement dans `web/` à chaque scan — aucune configuration supplémentaire requise.
 
 ---
 

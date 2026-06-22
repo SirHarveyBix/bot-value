@@ -174,3 +174,88 @@ def test_build_pinned_summary_regime_labels(regime, expected_label):
     """Chaque valeur de régime produit le bon libellé dans le résumé."""
     msg = _build_pinned_summary(pd.DataFrame(), pd.DataFrame(), regime)
     assert expected_label in msg
+
+
+# ── Insider buying dans le message Telegram ───────────────────────────────────
+
+
+def _make_stock_row(symbol="AAPL", insider_value=None, insider_date=None):
+    """Helper : DataFrame une ligne pour tests notifier."""
+    return pd.DataFrame(
+        [
+            {
+                "symbol": symbol,
+                "name": "Apple Inc.",
+                "sector": "Technology",
+                "score_global": 85,
+                "score_quality": 80,
+                "score_valuation": 75,
+                "score_momentum": 88,
+                "perf_6m": 0.15,
+                "outperf_6m": 0.05,
+                "pe": 25.0,
+                "roe": 0.35,
+                "mcap_b": 2800.0,
+                "insider_buy_value": insider_value,
+                "insider_buy_date": insider_date,
+                "first_seen_date": None,
+                "earnings_date": None,
+                "warning": None,
+                "suggested_weight_pct": 12.5,
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_telegram_signals_includes_insider_buy_line():
+    """Message Telegram contient '🏦 Insider buy' quand insider_buy_value est renseigné."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from scanner.notifier import send_telegram_signals
+
+    stock_df = _make_stock_row(insider_value=250_000.0, insider_date="2026-06-15")
+    captured = []
+
+    async def fake_send(bot, chat_id, text, **kwargs):
+        captured.append(text)
+        return MagicMock(message_id=1)
+
+    with (
+        patch("scanner.notifier._get_bot", return_value=(MagicMock(), "123")),
+        patch("scanner.notifier.send_message_safe", side_effect=fake_send),
+        patch("scanner.notifier.pin_message_safe", new_callable=AsyncMock),
+        patch("scanner.notifier.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await send_telegram_signals(stock_df, pd.DataFrame())
+
+    full_text = "\n".join(captured)
+    assert "🏦 Insider buy" in full_text
+    assert "$250k" in full_text
+    assert "2026-06-15" in full_text
+
+
+@pytest.mark.asyncio
+async def test_send_telegram_signals_no_insider_line_when_absent():
+    """Message Telegram n'a pas '🏦 Insider buy' si pas de valeur insider."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from scanner.notifier import send_telegram_signals
+
+    stock_df = _make_stock_row(insider_value=None, insider_date=None)
+    captured = []
+
+    async def fake_send(bot, chat_id, text, **kwargs):
+        captured.append(text)
+        return MagicMock(message_id=1)
+
+    with (
+        patch("scanner.notifier._get_bot", return_value=(MagicMock(), "123")),
+        patch("scanner.notifier.send_message_safe", side_effect=fake_send),
+        patch("scanner.notifier.pin_message_safe", new_callable=AsyncMock),
+        patch("scanner.notifier.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await send_telegram_signals(stock_df, pd.DataFrame())
+
+    full_text = "\n".join(captured)
+    assert "🏦 Insider buy" not in full_text
