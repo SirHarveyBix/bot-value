@@ -659,7 +659,8 @@ def test_check_data_ratio_fail():
     """4 valides / 10 → ratio=0.4 < 0.6 → False."""
     all_data = {f"T{i}": {"info": {"longName": f"Corp{i}"}} for i in range(4)}
     all_data.update({f"X{i}": {"info": None} for i in range(6)})
-    assert not check_data_ratio(all_data, 10)
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
+        assert not check_data_ratio(all_data, 10)
 
 
 def test_check_data_ratio_zero_eligible():
@@ -1339,7 +1340,13 @@ async def test_filter_post_scoring_stale_data_excluded():
         "FRESH": {"info": {"mostRecentQuarter": fresh_ts}},
     }
     df = pd.DataFrame(rows)
-    with patch("scanner.filters.earnings_calendar_check", return_value=None):
+    with (
+        patch("scanner.filters.earnings_calendar_check", return_value=None),
+        patch.dict(
+            "scanner.filters.CONFIG",
+            {"scanner": {"data_freshness_exclusion_days": 365, "data_freshness_warning_days": 180}},
+        ),
+    ):
         result = await filter_post_scoring(df, all_data)
     symbols = result["symbol"].tolist()
     assert "STALE" not in symbols
