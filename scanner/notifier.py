@@ -197,6 +197,10 @@ async def send_telegram_signals(top_stocks, top_etfs, market_regime=None, portfo
             except ValueError:
                 pass
 
+        if row.get("insider_buy_value") and row.get("insider_buy_date"):
+            value_k = int(row["insider_buy_value"] / 1000)
+            msg += f"🏦 Insider buy : ${value_k}k ({escape_html(str(row['insider_buy_date']))})\n"
+
         if row.get("earnings_date"):
             msg += f"📅 Earnings : {escape_html(str(row['earnings_date']))}\n"
 

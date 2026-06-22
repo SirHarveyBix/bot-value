@@ -34,6 +34,9 @@ scanner:
   exit_rank_threshold: 15
   exit_score_threshold: 70.0
   maturation_days: 3
+  insider_buy_days: 90
+  insider_buy_threshold: 50000
+  insider_buy_bonus_max: 5.0
 
 scoring:
   weights:

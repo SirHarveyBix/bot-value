@@ -583,6 +583,10 @@ def export_signals_json(top_stocks, top_etfs, universe_size: int, market_data: d
                 "mcap_b": float(row.get("mcap_b", 0)),
                 "flags": row.get("quality_flags") or [],
                 "first_seen_date": row.get("first_seen_date"),
+                "insider_buy_value": float(row["insider_buy_value"])
+                if row.get("insider_buy_value") is not None
+                else None,
+                "insider_buy_date": row.get("insider_buy_date"),
                 "suggested_weight_pct": float(row["suggested_weight_pct"])
                 if row.get("suggested_weight_pct") is not None
                 else None,
@@ -612,6 +616,12 @@ def export_signals_json(top_stocks, top_etfs, universe_size: int, market_data: d
     }
 
     with open(JSON_PATH, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+
+    # Copie dans web/ pour que le dashboard puisse y accéder (http.server --directory web)
+    web_json_path = "web/signals_latest.json"
+    os.makedirs(os.path.dirname(web_json_path), exist_ok=True)
+    with open(web_json_path, "w") as f:
         json.dump(payload, f, indent=2, default=str)
 
     logger.info(f"signals_latest.json exporté ({len(stocks_list)} stocks, {len(etfs_list)} ETFs)")

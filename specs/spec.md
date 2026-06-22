@@ -50,6 +50,36 @@
 
 **PO :** L'univers de départ sera le **S&P 500 + Russell 1000 + un panier d'ETFs sectoriels et thématiques** (environ 150 ETFs). Au total, on vise ~850 instruments avant filtres de liquidité, ce qui nous amènera à environ 600-700 instruments scorés. C'est le bon calibrage.
 
+> **[2026-06-23 — Amendment v1.3.0 — Univers dynamique FMP Screener]**
+> L'approche S&P 500 + ETFs a été abandonnée : les composants de ces indices sont connus et très suivis, ce qui réduit l'opportunité alpha. Remplacement par **FMP Stock Screener** (`/stable/company-screener`) avec les mêmes filtres d'éligibilité (cap > 2B$, volume > 5M$/j, NYSE/NASDAQ, US). Résultat : ~800–1500 tickers dynamiques incluant des mid-caps hors index, moins efficacement pricés. Implémenté dans `scanner/refresh_universe.py::refresh_from_fmp_screener()`. CLI : `python -m scanner.refresh_universe screener`.
+
+---
+
+### Acte 2bis — Signaux de découverte : Insider Buying et 13F
+
+**VE :** Au-delà de l'univers, la vraie question est : comment détecter une conviction forte avant que le marché la price ? Il existe deux signaux institutionnels de haute qualité.
+
+**Signal A — Insider Buying (implémenté v1.3.0)**
+
+Les achats de dirigeants et administrateurs sur leurs propres titres sont le signal le plus fort qui existe : ils n'achètent que pour gagner. Ce signal est particulièrement alpha-générateur sur les mid-caps non couverts par les grands analystes.
+
+- **Source** : FMP `/stable/insider-trading?transactionType=P-Purchase`
+- **Fenêtre** : 90 jours glissants
+- **Seuil d'activation** : total achats ≥ 50 000$
+- **Impact scoring** : bonus de 0 à +5 pts sur `score_global` (proportionnel au montant, max 5 pts pour 500k+)
+- **Affichage** : `🏦 Insider buy: $XXXk (YYYY-MM-DD)` dans Telegram et dashboard web
+- **Moment** : post-scoring uniquement sur le top 15 (10 calls FMP supplémentaires, hors disjoncteur principal)
+- **Constantes** : `insider_buy_days`, `insider_buy_threshold`, `insider_buy_bonus_max` dans `config.yaml`
+
+**Signal B — Accumulation institutionnelle 13F (roadmap v2.0)**
+
+Les fonds obligés de déclarer leurs positions (>100M$ AUM) publient leurs 13F trimestriellement avec 45 jours de retard. L'augmentation nette des positions institutionnelles sur un titre est un signal de conviction forte.
+
+- **Source** : FMP `/stable/institutional-ownership` ou SEC EDGAR XML
+- **Retard** : 45 jours (limite réglementaire SEC)
+- **Complexité** : parsing XML EDGAR ou abonnement FMP Premium
+- **Non implémenté** — prévu v2.0 si FMP plan évolue ou si Signal A s'avère insuffisant
+
 ---
 
 ### Acte 3 — Le scoring : comment on classe ?

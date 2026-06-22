@@ -10,7 +10,14 @@ from pytz import timezone
 
 import scanner.fetcher as _fetcher
 from scanner.config import CONFIG, logger
-from scanner.fetcher import SECTOR_ETFS, FMPUnavailableError, fetch_all_data, fetch_market_indices, fetch_prices_batch
+from scanner.fetcher import (
+    SECTOR_ETFS,
+    FMPUnavailableError,
+    fetch_all_data,
+    fetch_insider_buying_batch,
+    fetch_market_indices,
+    fetch_prices_batch,
+)
 from scanner.filters import cap_sector_shortlist, check_batch_data_ratio, check_data_ratio, filter_post_scoring
 from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import (
@@ -169,6 +176,27 @@ async def run_scanner(force=False):
         exclusions: list[dict] = []
         ranked_stocks_df = stock_scoring_pipeline(all_data, shortlist_stocks, exclusions_out=exclusions)
         ranked_etfs_df = etf_scoring_pipeline(all_data, initial_etfs)
+
+        # 6b. Insider buying — bonus post-scoring sur le top 15 (best-effort, hors disjoncteur FMP)
+        if not ranked_stocks_df.empty:
+            insider_threshold = CONFIG["scanner"].get("insider_buy_threshold", 50_000)
+            insider_bonus_max = CONFIG["scanner"].get("insider_buy_bonus_max", 5.0)
+            top_candidates = ranked_stocks_df.head(15)["symbol"].tolist()
+            insider_map = await fetch_insider_buying_batch(top_candidates)
+            for symbol, insider in insider_map.items():
+                if insider and insider["total_value"] >= insider_threshold:
+                    bonus = min(insider_bonus_max, insider["total_value"] / 100_000)
+                    mask = ranked_stocks_df["symbol"] == symbol
+                    ranked_stocks_df.loc[mask, "score_global"] = (
+                        ranked_stocks_df.loc[mask, "score_global"] + bonus
+                    ).clip(upper=100)
+                    ranked_stocks_df.loc[mask, "insider_buy_value"] = insider["total_value"]
+                    ranked_stocks_df.loc[mask, "insider_buy_date"] = insider["most_recent_date"]
+                    logger.info(
+                        f"Insider buy bonus {symbol}: ${insider['total_value']:,.0f} ({insider['most_recent_date']}) → +{bonus:.1f}pts"
+                    )
+            if insider_map:
+                ranked_stocks_df = ranked_stocks_df.sort_values("score_global", ascending=False)
 
         # 7. Post-Scoring Filters
         top_10_stocks = await filter_post_scoring(ranked_stocks_df, all_data, exclusions_out=exclusions)

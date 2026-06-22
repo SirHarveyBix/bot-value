@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import httpx
@@ -434,6 +434,71 @@ async def fetch_market_indices():
     except Exception as e:
         logger.error(f"Erreur fetch indices marché: {e}")
         return pd.DataFrame()
+
+
+async def fetch_insider_buying(client: httpx.AsyncClient, symbol: str) -> dict | None:
+    """Achats d'insiders (dirigeants/admins) sur les 90 derniers jours via FMP.
+
+    Retourne {total_value, most_recent_date, transaction_count} ou None si aucun achat.
+    Ne lève pas d'exception — utilisé en best-effort post-scoring.
+    """
+    api_key = CONFIG["scanner"].get("fmp_api_key")
+    base_url = CONFIG["scanner"].get("fmp_base_url")
+    if not api_key or api_key.startswith("${"):
+        return None
+
+    days = CONFIG["scanner"].get("insider_buy_days", 90)
+    cutoff = (datetime.now() - timedelta(days=days)).date()
+
+    try:
+        resp = await _fmp_get(
+            client,
+            f"{base_url}/insider-trading?symbol={symbol}&transactionType=P-Purchase&limit=20&apikey={api_key}",
+        )
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            return None
+
+        recent = []
+        for t in data:
+            date_str = t.get("transactionDate") or t.get("filingDate")
+            if not date_str:
+                continue
+            try:
+                if datetime.fromisoformat(date_str[:10]).date() >= cutoff:
+                    recent.append(t)
+            except ValueError:
+                continue
+
+        if not recent:
+            return None
+
+        total_value = sum(
+            float(t.get("value") or 0) or float(t.get("securitiesTransacted") or 0) * float(t.get("price") or 0)
+            for t in recent
+        )
+        if total_value <= 0:
+            return None
+
+        most_recent = max(t.get("transactionDate") or t.get("filingDate", "") for t in recent)
+        return {
+            "total_value": total_value,
+            "most_recent_date": most_recent[:10],
+            "transaction_count": len(recent),
+        }
+    except Exception as e:
+        logger.debug(f"fetch_insider_buying {symbol}: {e}")
+        return None
+
+
+async def fetch_insider_buying_batch(symbols: list[str]) -> dict[str, dict | None]:
+    """Fetch insider buying pour une liste de symboles (client httpx interne)."""
+    results: dict[str, dict | None] = {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for symbol in symbols:
+            results[symbol] = await fetch_insider_buying(client, symbol)
+            await asyncio.sleep(0.3)
+    return results
 
 
 async def fetch_all_data(tickers, etfs=None, prices_batch=None):
