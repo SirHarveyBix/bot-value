@@ -1,0 +1,29 @@
+{
+  "scan_timestamp": "2026-06-23T01:21:26.007186",
+  "universe_size": 500,
+  "market_regime": null,
+  "vix": null,
+  "spy_price": null,
+  "spy_ema200": null,
+  "top_stocks": [
+    {
+      "symbol": "AAPL",
+      "name": "Apple",
+      "sector": "Technology",
+      "score_global": 85.0,
+      "score_quality": 80.0,
+      "score_valuation": 75.0,
+      "score_momentum": 90.0,
+      "pe": 25.0,
+      "roe": 0.35,
+      "perf_6m": 0.15,
+      "mcap_b": 2800.0,
+      "flags": [],
+      "first_seen_date": "2026-06-01",
+      "insider_buy_value": 250000.0,
+      "insider_buy_date": "2026-06-15",
+      "suggested_weight_pct": 12.5
+    }
+  ],
+  "top_etfs": []
+}
