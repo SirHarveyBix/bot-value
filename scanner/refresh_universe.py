@@ -74,6 +74,37 @@ def update_universe_file(new_stocks=None, new_etfs=None):
         logger.error(f"Erreur écriture univers: {e}")
 
 
+def refresh_from_fmp_screener() -> list[str]:
+    """Univers dynamique via FMP Stock Screener (NYSE/NASDAQ, US, mid-large caps).
+
+    CLI: python -m scanner.refresh_universe screener
+    Retourne ~800-1500 tickers US non limités aux composants d'un index connu.
+    """
+    api_key = os.getenv("FMP_API_KEY")
+    if not api_key:
+        logger.error("FMP_API_KEY manquante — impossible d'appeler le screener.")
+        return []
+
+    base_url = os.getenv("FMP_BASE_URL", "https://financialmodelingprep.com/stable")
+    params = {
+        "marketCapMoreThan": 2_000_000_000,
+        "volumeMoreThan": 5_000_000,
+        "exchange": "NYSE,NASDAQ",
+        "country": "US",
+        "apikey": api_key,
+    }
+    try:
+        resp = requests.get(f"{base_url}/company-screener", params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        tickers = [item["symbol"] for item in data if item.get("symbol")]
+        logger.info(f"{len(tickers)} tickers récupérés via FMP screener.")
+        return tickers
+    except Exception as e:
+        logger.error(f"Erreur FMP screener: {e}")
+        return []
+
+
 def refresh_nifty50():
     """
     Récupère le NIFTY 50 (Inde) depuis Wikipedia.
@@ -117,7 +148,10 @@ if __name__ == "__main__":
 
     source = sys.argv[1] if len(sys.argv) > 1 else "sp500"
 
-    if source == "sp500":
+    if source == "screener":
+        tickers = refresh_from_fmp_screener()
+        update_universe_file(new_stocks=tickers)
+    elif source == "sp500":
         tickers = refresh_sp500()
         update_universe_file(new_stocks=tickers)
     elif source == "india":

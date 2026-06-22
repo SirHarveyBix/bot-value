@@ -16,6 +16,7 @@ from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import (
     notify,
     notify_exclusions,
+    notify_fmp_unavailable,
     notify_panic,
     notify_vix_unavailable,
     notify_yfinance_ban,
@@ -39,6 +40,8 @@ from scanner.storage import (
 )
 from scanner.universe import build_eligible_universe, load_universe
 
+_scanner_lock = asyncio.Lock()
+
 
 def is_market_open():
     """Vérifie si le NYSE est ouvert aujourd'hui."""
@@ -59,6 +62,11 @@ async def run_scanner(force=False):
         logger.info("Le marché NYSE est fermé aujourd'hui. Scan annulé (utilisez --force pour passer outre).")
         return
 
+    if _scanner_lock.locked():
+        logger.warning("Scan déjà en cours — appel ignoré (double-déclenchement scheduler/Telegram).")
+        return
+
+    await _scanner_lock.acquire()
     try:
         # 0. Market Gate : VIX-priority 4-level cascade
         market_history = await fetch_market_indices()
@@ -154,6 +162,7 @@ async def run_scanner(force=False):
 
         if not check_data_ratio(all_data, len(shortlist_stocks)):
             logger.error("Scan interrompu : trop d'échecs lors du fetch des fondamentaux (Sniper).")
+            await notify_fmp_unavailable()
             return
 
         # 6. Scoring Engine Complet
@@ -217,6 +226,8 @@ async def run_scanner(force=False):
         logger.info("Scan quotidien terminé avec succès.")
     except Exception as e:
         logger.exception(f"Erreur critique lors du scan: {e}")
+    finally:
+        _scanner_lock.release()
 
 
 async def test_telegram():
