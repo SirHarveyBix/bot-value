@@ -247,47 +247,6 @@ def _roe_from_yfinance(symbol: str) -> float | None:
     return sum(roes) / len(roes) if roes else None
 
 
-def _fetch_yfinance_info_sync(symbol: str) -> dict | None:
-    """Fallback fondamentaux complets via yfinance quand FMP retourne 402/None.
-
-    Appelé via asyncio.to_thread (yfinance est synchrone).
-    """
-    try:
-        info = yf.Ticker(symbol).info
-        if not info or info.get("quoteType") == "NONE":
-            return None
-        total_debt = info.get("totalDebt")
-        total_cash = info.get("totalCash")
-        net_debt = (total_debt - total_cash) if (total_debt is not None and total_cash is not None) else total_debt
-        return {
-            "symbol": symbol,
-            "longName": info.get("longName"),
-            "sector": normalize_sector_name(info.get("sector")),
-            "marketCap": info.get("marketCap"),
-            "roe_ttm": info.get("returnOnEquity"),
-            "roe_3y": None,
-            "roicTTM": None,
-            "operatingMargins": info.get("operatingMargins"),
-            "totalDebt": total_debt,
-            "totalCash": total_cash,
-            "netDebt": net_debt,
-            "ebitda": info.get("ebitda"),
-            "freeCashflow": info.get("freeCashflow"),
-            "forwardPE": info.get("forwardPE"),
-            "enterpriseToEbitda": info.get("enterpriseToEbitda"),
-            "pegRatio": info.get("pegRatio"),
-            "surprise_pct": None,
-            "surprise_date": None,
-            "analyst_revision_3m": None,
-            "mostRecentQuarter": info.get("mostRecentQuarter"),
-            "bookValuePerShare": info.get("bookValue"),
-            "source": "yfinance",
-        }
-    except Exception as e:
-        logger.warning(f"_fetch_yfinance_info_sync {symbol}: {e}")
-        return None
-
-
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
@@ -449,13 +408,20 @@ async def fetch_fmp_data(client, symbol):
         return None
 
 
+_FMP_UNAVAILABLE_SENTINEL = {"_fmp_unavailable": True}
+
+
 async def fetch_ticker_info(symbol, client=None):
     """
-    Récupère les informations d'un ticker avec cache.
-    Lève FMPUnavailableError si FMP indisponible.
+    Récupère les fondamentaux FMP avec cache 7 jours.
+    Rôles stricts : FMP = fondamentaux, yfinance = OHLCV uniquement.
+    Tickers 402 (plan gratuit) : cachés comme indisponibles pour éviter retry quotidien.
     """
     cached_data = cache.get("fundamentals", symbol, TTL_FUNDAMENTALS)
-    if cached_data:
+    if cached_data is not None:
+        if isinstance(cached_data, dict) and cached_data.get("_fmp_unavailable"):
+            logger.debug(f"{symbol}: FMP indisponible (sentinel caché) — skip sans appel réseau")
+            return None
         return cached_data
 
     info = None
@@ -463,16 +429,13 @@ async def fetch_ticker_info(symbol, client=None):
         info = await fetch_fmp_data(client, symbol)
 
     if info is None:
-        logger.info(f"FMP indisponible pour {symbol} — fallback yfinance fondamentaux")
-        info = await asyncio.to_thread(_fetch_yfinance_info_sync, symbol)
-        if info is not None:
-            roe_3y = await asyncio.to_thread(_roe_from_yfinance, symbol)
-            if roe_3y is not None:
-                info["roe_3y"] = roe_3y
+        cache.set("fundamentals", symbol, _FMP_UNAVAILABLE_SENTINEL)
+        logger.debug(f"{symbol}: FMP indisponible — sentinel caché 7j, aucun retry avant expiration")
+        return None
 
-    if info and info.get("roe_3y") is not None:
+    if info.get("roe_3y") is not None:
         cache.set("fundamentals", symbol, info)
-    elif info:
+    else:
         logger.warning(f"fetch_ticker_info {symbol}: roe_3y=None, résultat non mis en cache (retry au prochain scan)")
     return info
 
@@ -593,6 +556,10 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
     except FMPUnavailableError as e:
         await notify_fmp_unavailable(reason=str(e))
         raise
+
+    fmp_skipped = sum(1 for s in tickers if results.get(s, {}).get("info") is None)
+    if fmp_skipped > 0:
+        logger.info(f"Sniper : {fmp_skipped}/{len(tickers)} tickers sans données FMP (402/quota) — exclus du scoring")
 
     for s_etf in list(set(etfs + SECTOR_ETFS)):
         prices = prices_batch[s_etf] if s_etf in present else None

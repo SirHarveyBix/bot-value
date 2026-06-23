@@ -23,7 +23,7 @@ scanner:
   fmp_call_budget_hard_limit: 175
   yfinance_chunk_size: 100
   yfinance_chunk_delay_s: 2.0
-  cache_ttl_fundamentals: 97200
+  cache_ttl_fundamentals: 604800 # 7 jours — fondamentaux FMP mis à jour trimestriellement, cache hebdomadaire préserve le quota 250 calls/jour
   cache_ttl_prices: 14400
   min_universe_size: 100
   telegram_max_chars: 4096

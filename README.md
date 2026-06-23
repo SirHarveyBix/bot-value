@@ -28,8 +28,9 @@ Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'ag
 - **Philosophie** : Acheter des entreprises exceptionnelles (ROE stable sur 3 ans) au moment où le marché commence à les réévaluer à la hausse (Surprise Earnings + Momentum 6M).
 - **Gestion du risque** : Market Gate automatique (SPY > EMA 200 + VIX < 25). En régime de panique (VIX > 35), le bot envoie une alerte et n'émet aucun signal.
 - **Pipeline** :
-  - Étape 1 (Chalutier) : screening technique massif sur l'univers complet via yfinance (gratuit).
-  - Étape 2 (Sniper) : analyse fondamentale institutionnelle via FMP API sur une shortlist de 30 tickers.
+  - Étape 1 (Chalutier) : screening technique massif sur l'univers complet via yfinance (prix OHLCV uniquement).
+  - Étape 2 (Sniper) : analyse fondamentale via FMP API sur une shortlist de 30 tickers — résultats **cachés 7 jours** (fondamentaux trimestriels, quota FMP préservé).
+- **Séparation stricte des sources** : yfinance = prix/momentum, FMP = fondamentaux (ROE, marge, dette). Aucun fallback croisé.
 
 ---
 
@@ -38,7 +39,7 @@ Le bot est conçu pour le **Position Trading** (horizon 3 à 6 mois). Il ne s'ag
 - **macOS** (optimisé Mac Mini, mais fonctionne sur tout Mac)
 - **Python 3.11+** — vérifiez avec `python3 --version`
 - **Git** — pour cloner le projet
-- **Compte Financial Modeling Prep** (gratuit) — limite nominale 250 appels/jour, disjoncteur hard limit à 245
+- **Compte Financial Modeling Prep** (gratuit) — 250 appels/jour, consommés **1 fois/semaine** grâce au cache 7 jours
 - **Bot Telegram** — pour recevoir les alertes
 
 ---
@@ -64,7 +65,14 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Le scanner utilise un pipeline hybride : **yfinance** (gratuit, sans clé) pour les données de prix, et **Financial Modeling Prep (FMP)** pour les fondamentaux institutionnels.
+Le scanner utilise une architecture à **sources découplées** :
+
+| Source | Rôle | Fréquence |
+|--------|------|-----------|
+| **yfinance** | Prix OHLCV, momentum 6M, EMA200 | Quotidien |
+| **FMP API** | Fondamentaux (ROE, marge, dette, P/E) | 1×/semaine via cache 7 jours |
+
+> Les fondamentaux ne changent qu'à chaque publication trimestrielle. Le cache 7 jours évite de consommer les 250 appels/jour FMP quotidiennement — ils sont utilisés ~1 fois par semaine.
 
 ### 1. Créer le fichier `.env`
 
@@ -404,7 +412,7 @@ bot-value/
 │   │   └── tickers_universe.json   # Liste des tickers (versionné)
 │   ├── signals/
 │   │   └── scanner_history.db      # Historique SQLite (non versionné)
-│   ├── cache/                      # Cache fondamentaux 24h (non versionné)
+│   ├── cache/                      # Cache fondamentaux 7j FMP + sentinels 402 (non versionné)
 │   └── logs/                       # Logs rotation quotidienne (non versionné)
 └── web/
     └── index.html             # Dashboard de visualisation

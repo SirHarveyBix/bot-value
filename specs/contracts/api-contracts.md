@@ -13,7 +13,7 @@ all_data: dict[str, {
     "info": {
         # Identité
         "symbol": str,
-        "source": "FMP" | "yfinance",       # FMP si disponible, yfinance si FMP retourne 402/None
+        "source": "FMP",                    # toujours FMP — yfinance = OHLCV uniquement (Règle d'Or)
         "longName": str | None,
         "sector": str | None,               # None → exclusion pipeline Actions (sector_missing)
         "marketCap": int | None,
@@ -23,7 +23,7 @@ all_data: dict[str, {
         "roe_3y": float | None,             # ROE moyen 3 ans (income-statement 3 périodes)
         "operatingMargins": float | None,
         "totalDebt": float | None,
-        "totalCash": None | float,          # None si source=FMP (n'expose pas totalCash) ; float si source=yfinance
+        "totalCash": None,                  # Toujours None (FMP stable API n'expose pas totalCash)
         "netDebt": float | None,            # netDebtTTM via key-metrics-ttm
         "ebitda": float | None,
         "freeCashflow": float | None,       # freeCashFlowPerShareTTM × sharesOutstanding
@@ -34,15 +34,14 @@ all_data: dict[str, {
         "pegRatio": float | None,
 
         # Pilier Momentum fondamental — via FMP
-        "surprise_pct": float,              # 0.0 si absent (earnings-surprises endpoint)
+        "surprise_pct": float | None,       # None — earnings-surprises endpoint indisponible plan gratuit
         "surprise_date": str | None,        # ISO 'YYYY-MM-DD' (pour décroissance temporelle)
         "analyst_revision_3m": float | None, # % révision EPS 3M (analyst-estimates endpoint)
 
         # Méta
-        "book_value_per_share": float | None,  # pour détection ROE gonflé par buybacks
-        # Champs absents si source=yfinance (non disponibles)
-        "roicTTM": float | None,           # None si source=yfinance
-    } | None,                               # None = FMPUnavailableError (401/403/5xx) OU yfinance aussi indisponible
+        "bookValuePerShare": float | None,  # pour détection ROE gonflé par buybacks
+        "roicTTM": float | None,           # None si FMP key-metrics-ttm manquant
+    } | None,                               # None = ticker FMP indisponible (402/quota) ou FMPUnavailableError (401/403/5xx)
 
     "prices": pd.DataFrame | None          # OHLCV, index datetime UTC, colonnes Open/High/Low/Close/Volume
 }]
@@ -121,6 +120,8 @@ class FMPUnavailableError(Exception):
 ```
 
 Propagation : `fetch_fmp_data()` → `fetch_ticker_info()` → `fetch_all_data()` → `main.py` (catch → `return`)
+
+**Note** : HTTP 402 (ticker hors plan) et 404 ne lèvent pas `FMPUnavailableError` — ils retournent `None` et déclenchent le fallback yfinance dans `fetch_ticker_info`. Seuls 401/403 (auth) et 5xx persistants lèvent l'exception.
 
 ---
 

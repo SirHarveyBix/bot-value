@@ -113,8 +113,8 @@ def data_freshness_check(ticker_info):
     last_update = datetime.fromtimestamp(last_update_ts)
     age_days = (datetime.now() - last_update).days
 
-    max_age = CONFIG["scanner"].get("data_freshness_exclusion_days", 200)
-    warning_age = CONFIG["scanner"].get("data_freshness_warning_days", 120)
+    max_age = CONFIG["scanner"].get("data_freshness_exclusion_days", 700)
+    warning_age = CONFIG["scanner"].get("data_freshness_warning_days", 450)
 
     if age_days >= max_age:
         return False, False, f"Données trop vieilles: {age_days} jours"

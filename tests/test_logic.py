@@ -278,11 +278,11 @@ def test_valuation_score_calculation():
     assert ok
     assert abs(score - 71.25) < 1e-9
 
-    # Cas 3 : P/E TTM fallback (Pénalité -5)
+    # Cas 3 : pe_flag ignoré (BF-018 — pénalité -5pts supprimée)
     row_ttm = pd.Series({"rank_pe": 80, "rank_ev_ebitda": 60, "rank_peg": 70, "pe_flag": "P/E TTM used as fallback"})
     score, ok = compute_valuation_score(row_ttm)
     assert ok
-    assert score == 66.0  # 71 - 5
+    assert score == 71.0  # pas de pénalité pe_flag depuis BF-018
 
     # Cas 4 : P/E ET EV/EBITDA absents → exclusion pilier (repondération 50/50)
     row_nan = pd.Series({"rank_pe": None, "rank_ev_ebitda": None, "rank_peg": 70, "pe_flag": None})
@@ -666,6 +666,14 @@ def test_check_data_ratio_fail():
 def test_check_data_ratio_zero_eligible():
     """eligible_count=0 → False."""
     assert not check_data_ratio({}, 0)
+
+
+def test_check_data_ratio_mix_fmp_yfinance():
+    """20 tickers source=yfinance + 10 source=FMP → 30/30 valides → True."""
+    all_data = {f"YF{i}": {"info": {"source": "yfinance", "longName": f"Corp{i}"}} for i in range(20)}
+    all_data.update({f"FMP{i}": {"info": {"source": "FMP", "longName": f"Corp{i}"}} for i in range(10)})
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
+        assert check_data_ratio(all_data, 30)
 
 
 # ── earnings_calendar_check ───────────────────────────────────────────────────

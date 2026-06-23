@@ -133,9 +133,6 @@ def compute_valuation_score(row):
     full_w = vw["pe_forward"] + vw["ev_ebitda"] + vw["peg"]
     v_score = (score / used_w) * full_w if used_w > 0 else 0.0
 
-    if pd.notna(row.get("pe_flag")):
-        v_score -= 5
-
     return max(0.0, v_score), True
 
 

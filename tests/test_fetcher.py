@@ -240,88 +240,31 @@ async def test_fmp_401_raises_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_fetch_ticker_info_falls_back_to_yfinance_when_fmp_returns_none():
-    """Quand FMP retourne None (402), fetch_ticker_info utilise le fallback yfinance."""
-    from scanner.fetcher import fetch_ticker_info
-
-    yf_info = {
-        "symbol": "SNDK",
-        "longName": "SanDisk Corp",
-        "sector": "Technology",
-        "marketCap": 10_000_000_000,
-        "roe_ttm": 0.15,
-        "roe_3y": None,
-        "roicTTM": None,
-        "operatingMargins": 0.20,
-        "totalDebt": 500_000_000,
-        "totalCash": 200_000_000,
-        "netDebt": 300_000_000,
-        "ebitda": 1_000_000_000,
-        "freeCashflow": 800_000_000,
-        "forwardPE": 15.0,
-        "enterpriseToEbitda": 10.0,
-        "pegRatio": 1.2,
-        "surprise_pct": None,
-        "surprise_date": None,
-        "analyst_revision_3m": None,
-        "mostRecentQuarter": 1700000000,
-        "bookValuePerShare": 25.0,
-        "source": "yfinance",
-    }
-
-    with patch("scanner.fetcher.cache") as mock_cache:
-        mock_cache.get.return_value = None
-        with patch("scanner.fetcher.fetch_fmp_data", return_value=None) as mock_fmp:
-            with patch("scanner.fetcher.asyncio.to_thread") as mock_thread:
-                mock_thread.side_effect = [yf_info, 0.18]  # _fetch_yfinance_info_sync, _roe_from_yfinance
-                result = await fetch_ticker_info("SNDK", client=AsyncMock())
-
-    mock_fmp.assert_called_once()
-    assert result is not None
-    assert result["source"] == "yfinance"
-    assert result["roe_3y"] == 0.18
-
-
-@pytest.mark.asyncio
-async def test_fetch_ticker_info_yfinance_fallback_without_roe3y():
-    """Fallback yfinance sans roe_3y → résultat retourné mais non mis en cache."""
-    from scanner.fetcher import fetch_ticker_info
-
-    yf_info = {
-        "symbol": "SNDK",
-        "source": "yfinance",
-        "roe_3y": None,
-        "longName": "SanDisk Corp",
-        "sector": "Technology",
-        "marketCap": 10_000_000_000,
-        "roe_ttm": 0.15,
-        "roicTTM": None,
-        "operatingMargins": 0.20,
-        "totalDebt": None,
-        "totalCash": None,
-        "netDebt": None,
-        "ebitda": None,
-        "freeCashflow": None,
-        "forwardPE": 15.0,
-        "enterpriseToEbitda": None,
-        "pegRatio": None,
-        "surprise_pct": None,
-        "surprise_date": None,
-        "analyst_revision_3m": None,
-        "mostRecentQuarter": None,
-        "bookValuePerShare": None,
-    }
+async def test_fetch_ticker_info_caches_sentinel_when_fmp_returns_none():
+    """FMP retourne None (402) → sentinel caché, None retourné, pas de fallback yfinance."""
+    from scanner.fetcher import _FMP_UNAVAILABLE_SENTINEL, fetch_ticker_info
 
     with patch("scanner.fetcher.cache") as mock_cache:
         mock_cache.get.return_value = None
         with patch("scanner.fetcher.fetch_fmp_data", return_value=None):
-            with patch("scanner.fetcher.asyncio.to_thread") as mock_thread:
-                mock_thread.side_effect = [yf_info, None]  # yf_info retourné, roe_3y=None
-                result = await fetch_ticker_info("SNDK", client=AsyncMock())
+            result = await fetch_ticker_info("SNDK", client=AsyncMock())
 
-    assert result is not None
-    assert result["roe_3y"] is None
-    mock_cache.set.assert_not_called()
+    assert result is None
+    mock_cache.set.assert_called_once_with("fundamentals", "SNDK", _FMP_UNAVAILABLE_SENTINEL)
+
+
+@pytest.mark.asyncio
+async def test_fetch_ticker_info_uses_sentinel_to_skip_fmp_call():
+    """Sentinel caché → FMP non appelé, None retourné immédiatement."""
+    from scanner.fetcher import _FMP_UNAVAILABLE_SENTINEL, fetch_ticker_info
+
+    with patch("scanner.fetcher.cache") as mock_cache:
+        mock_cache.get.return_value = _FMP_UNAVAILABLE_SENTINEL
+        with patch("scanner.fetcher.fetch_fmp_data") as mock_fmp:
+            result = await fetch_ticker_info("SNDK", client=AsyncMock())
+
+    assert result is None
+    mock_fmp.assert_not_called()
 
 
 # ── fetch_insider_buying ──────────────────────────────────────────────────────

@@ -273,7 +273,7 @@ async def test_fmp_unavailable_abort():
 
     fmp_unavailable_called = False
 
-    async def mock_notify_fmp():
+    async def mock_notify_fmp(reason=""):
         nonlocal fmp_unavailable_called
         fmp_unavailable_called = True
 
