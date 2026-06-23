@@ -109,16 +109,29 @@ async def notify_fmp_unavailable():
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
-async def notify_vix_unavailable():
-    """Envoie l'alerte Telegram VIX/SPY indisponible → scan annulé (T081)."""
+async def notify_vix_unavailable(reason: str = "serie_vide"):
+    """Envoie l'alerte Telegram VIX/SPY indisponible → scan annulé (T081).
+
+    reason:
+      "absent"     — SPY ou ^VIX absent du téléchargement yfinance
+      "serie_vide" — série vide après dropna (NaN/0)
+      "spy_plat"   — SPY std < 1.0 (données stale yfinance)
+      "indices_vides" — DataFrame complet vide
+    """
     bot, chat_id = _get_bot()
     if not bot:
         logger.warning("Notifications Telegram désactivées (token manquant).")
         return
+    detail = {
+        "absent": "SPY ou ^VIX absent du téléchargement yfinance (ticker non reconnu).",
+        "serie_vide": "La série VIX ou SPY ne contient aucune valeur valide après filtrage NaN/0.",
+        "spy_plat": "SPY retourné par yfinance est suspect : série quasi-plate (données stale). Probable ban IP yfinance.",
+        "indices_vides": "yfinance n'a retourné aucune donnée pour SPY/VIX (DataFrame vide).",
+    }.get(reason, "Erreur inconnue Market Gate.")
     msg = (
-        "⚠️ <b>VIX indisponible — scan annulé</b>\n"
-        "<i>La série VIX ou SPY ne contient aucune valeur valide (NaN/0). "
-        "Le scan a été interrompu pour préserver l'intégrité du Market Gate.</i>"
+        f"⚠️ <b>Market Gate — scan annulé</b>\n"
+        f"<code>{reason}</code> : {detail}\n"
+        "<i>Le scan reprendra à 09h35 ET. Si l'erreur persiste, vérifier les logs sur le serveur.</i>"
     )
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
@@ -325,6 +338,34 @@ async def notify_exclusions(exclusions: list[dict]) -> None:
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
+async def notify_error(module: str, error: str) -> None:
+    """Alerte Telegram pour toute erreur critique de scan (SC-004)."""
+    bot, chat_id = _get_bot()
+    if not bot:
+        return
+    msg = (
+        f"🚨 <b>ValueMomentum — Erreur critique</b>\n"
+        f"Module : <code>{escape_html(module)}</code>\n"
+        f"Erreur : <code>{escape_html(error[:300])}</code>\n"
+        "<i>Vérifier les logs sur le serveur.</i>"
+    )
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
+
+
+async def notify_universe_too_small(count: int, minimum: int) -> None:
+    """Alerte Telegram si l'univers éligible est trop petit pour un scan fiable."""
+    bot, chat_id = _get_bot()
+    if not bot:
+        return
+    msg = (
+        f"⚠️ <b>Univers trop petit — scan annulé</b>\n"
+        f"{count} tickers éligibles &lt; minimum {minimum}.\n"
+        "<i>yfinance retourne probablement des données partielles (IP throttle).\n"
+        "Le scan reprendra demain à 09h35 ET.</i>"
+    )
+    await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
+
+
 async def notify_yfinance_ban() -> None:
     """Alerte Telegram si yfinance retourne trop peu de données (IP ban probable)."""
     bot, chat_id = _get_bot()
@@ -448,14 +489,24 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                         def _get_status():
                             try:
                                 with sqlite3.connect(DB_PATH) as conn:
-                                    return conn.execute(
+                                    scan_row = conn.execute(
                                         "SELECT scan_date, market_regime, spy_price, vix FROM scans ORDER BY scan_date DESC LIMIT 1"
                                     ).fetchone()
+                                    signal_count = conn.execute(
+                                        "SELECT COUNT(*) FROM signals WHERE scan_date = (SELECT MAX(scan_date) FROM signals)"
+                                    ).fetchone()
+                                    total_scans = conn.execute("SELECT COUNT(*) FROM scans").fetchone()
+                                    return (
+                                        scan_row,
+                                        (signal_count[0] if signal_count else 0),
+                                        (total_scans[0] if total_scans else 0),
+                                    )
                             except Exception as err:
                                 logger.warning(f"Erreur lecture statut DB: {err}")
-                                return None
+                                return None, 0, 0
 
-                        row = await asyncio.to_thread(_get_status)
+                        result = await asyncio.to_thread(_get_status)
+                        row, signal_count, total_scans = result
                         if row:
                             scan_date, regime, spy, vix = row
                             regime_label = {
@@ -464,14 +515,21 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                                 "bear_light": "🐻 BEAR LIGHT",
                                 "normal": "✅ NORMAL",
                             }.get(regime or "normal", "✅ NORMAL")
+                            try:
+                                age_h = int((datetime.now() - datetime.fromisoformat(scan_date)).total_seconds() / 3600)
+                                age_str = f"{age_h}h" if age_h < 48 else f"{age_h // 24}j"
+                            except Exception:
+                                age_str = "?"
+                            in_progress_str = " | ⏳ scan en cours" if _scan_in_progress else ""
                             status_msg = (
-                                f"📌 <b>Dernier scan : {scan_date}</b>\n"
+                                f"📌 <b>Dernier scan : {scan_date}</b> (il y a {age_str}){in_progress_str}\n"
                                 f"Régime : {regime_label} | SPY : {spy:.2f} | VIX : {vix:.1f}\n"
+                                f"Signaux émis : {signal_count} | Scans total : {total_scans}\n"
                                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                 "Commandes : /scan /status /help"
                             )
                         else:
-                            status_msg = "❓ Aucun scan en base."
+                            status_msg = "❓ Aucun scan en base. Scanner démarré ?"
                         await send_message_safe(bot, chat_id, status_msg, parse_mode="HTML")
 
                     elif text == "/help":
@@ -492,11 +550,11 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                             "\n"
                             "🏆 <b>Score global (0–100)</b>\n"
                             "Composite de 3 piliers pondérés :\n"
-                            "  • Qualité : 40 %\n"
-                            "  • Momentum : 40 %\n"
-                            "  • Valorisation : 20 %\n"
+                            "  • Qualité : 35 %\n"
+                            "  • Momentum : 35 %\n"
+                            "  • Valorisation : 30 %\n"
                             "\n"
-                            "🔵 <b>Qualité (40 %)</b>\n"
+                            "🔵 <b>Qualité (35 %)</b>\n"
                             "Mesure la solidité financière de l'entreprise.\n"
                             "  • <b>ROE 3 ans</b> : rentabilité sur fonds propres moyennée sur 3 ans. Doit être &gt; 0 (obligatoire).\n"
                             "  • <b>ROIC</b> : retour sur capital investi.\n"
@@ -508,14 +566,14 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                         await asyncio.sleep(1.0)
 
                         aide2 = (
-                            "📈 <b>Momentum (40 %)</b>\n"
+                            "📈 <b>Momentum (35 %)</b>\n"
                             "Mesure la dynamique de prix récente.\n"
                             "  • <b>Perf 6M</b> : performance sur 6 mois (126 séances).\n"
                             "  • <b>Perf 3M</b> : performance sur 3 mois.\n"
                             "  • <b>Surperf. secteur</b> : perf du titre vs ETF de son secteur.\n"
                             "  • <b>Surprise earnings</b> : bonus si l'entreprise a battu les estimations récemment (décroit sur 90j).\n"
                             "\n"
-                            "💰 <b>Valorisation (20 %)</b>\n"
+                            "💰 <b>Valorisation (30 %)</b>\n"
                             "Cherche les titres peu chers par rapport à leurs pairs.\n"
                             "  • <b>P/E forward</b> : prix / bénéfice estimé. Moins = mieux.\n"
                             "  • <b>EV/EBITDA</b> : valeur entreprise / résultat opérationnel.\n"

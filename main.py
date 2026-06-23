@@ -22,9 +22,11 @@ from scanner.filters import cap_sector_shortlist, check_batch_data_ratio, check_
 from scanner.market_gate import MarketRegime, evaluate_market_regime
 from scanner.notifier import (
     notify,
+    notify_error,
     notify_exclusions,
     notify_fmp_unavailable,
     notify_panic,
+    notify_universe_too_small,
     notify_vix_unavailable,
     notify_yfinance_ban,
     poll_telegram_commands,
@@ -88,7 +90,7 @@ async def run_scanner(force=False):
                 vix_close = market_history["Close"]["^VIX"]
             except KeyError:
                 logger.error("SPY ou ^VIX absent du téléchargement market — scan annulé.")
-                await notify_vix_unavailable()
+                await notify_vix_unavailable(reason="absent")
                 return
 
             spy_valid = spy_close.replace(0, float("nan")).dropna()
@@ -96,7 +98,7 @@ async def run_scanner(force=False):
 
             if spy_valid.empty or vix_valid.empty:
                 logger.error("VIX ou SPY indisponible (série vide après dropna) — scan annulé.")
-                await notify_vix_unavailable()
+                await notify_vix_unavailable(reason="serie_vide")
                 return
 
             ema200 = spy_valid.ewm(span=200, adjust=False).mean().iloc[-1].item()
@@ -109,7 +111,7 @@ async def run_scanner(force=False):
                     f"SPY série plate suspecte (std={spy_std:.4f}, price={current_spy:.2f}) — "
                     "yfinance a probablement retourné des données stale. Scan annulé."
                 )
-                await notify_vix_unavailable()
+                await notify_vix_unavailable(reason="spy_plat")
                 return
 
             regime = evaluate_market_regime(current_vix, current_spy, ema200)
@@ -118,7 +120,7 @@ async def run_scanner(force=False):
             )
         else:
             logger.error("Indices marché indisponibles (DataFrame vide) — scan annulé.")
-            await notify_vix_unavailable()
+            await notify_vix_unavailable(reason="indices_vides")
             return
 
         market_regime = regime.value
@@ -142,6 +144,7 @@ async def run_scanner(force=False):
             logger.error(
                 f"universe_too_small : {len(eligible_stocks)} tickers éligibles < {min_universe_size}. Scan annulé."
             )
+            await notify_universe_too_small(len(eligible_stocks), min_universe_size)
             return
 
         # 3. Le Chalutier : prix stocks + ETFs sectoriels (sector outperformance + ETF scoring)
@@ -165,6 +168,7 @@ async def run_scanner(force=False):
         try:
             all_data = await fetch_all_data(shortlist_stocks, initial_etfs, prices_batch=price_data)
         except FMPUnavailableError:
+            await notify_fmp_unavailable()
             return
 
         if not check_data_ratio(all_data, len(shortlist_stocks)):
@@ -254,6 +258,7 @@ async def run_scanner(force=False):
         logger.info("Scan quotidien terminé avec succès.")
     except Exception as e:
         logger.exception(f"Erreur critique lors du scan: {e}")
+        await notify_error("run_scanner", str(e))
     finally:
         _scanner_lock.release()
 
