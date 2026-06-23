@@ -121,7 +121,7 @@ class FMPUnavailableError(Exception):
 
 Propagation : `fetch_fmp_data()` → `fetch_ticker_info()` → `fetch_all_data()` → `main.py` (catch → `return`)
 
-**Note** : HTTP 402 (ticker hors plan) et 404 ne lèvent pas `FMPUnavailableError` — ils retournent `None` et déclenchent le fallback yfinance dans `fetch_ticker_info`. Seuls 401/403 (auth) et 5xx persistants lèvent l'exception.
+**Note** : HTTP 402 (ticker hors plan) et 404 ne lèvent pas `FMPUnavailableError` — ils retournent `None`, le sentinel `{"_fmp_unavailable": True}` est mis en cache 7 jours, et le ticker est skippé sans retry. Seuls 401/403 (auth) et 5xx persistants lèvent l'exception.
 
 ---
 
