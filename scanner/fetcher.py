@@ -295,7 +295,16 @@ async def fetch_fmp_data(client, symbol):
             if not body:
                 parsed.append(None)
                 continue
-            data = resp.json()
+            if resp.status_code >= 400:
+                raise FMPUnavailableError(
+                    f"FMP HTTP {resp.status_code} pour {symbol}: {body[:200]}"
+                )
+            try:
+                data = resp.json()
+            except Exception as json_err:
+                raise FMPUnavailableError(
+                    f"FMP réponse non-JSON (HTTP {resp.status_code}) pour {symbol}: {body[:200]}"
+                ) from json_err
             # FMP retourne {"Error Message": "..."} ou [{"Error Message": "..."}] quand quota/auth échoue
             err_item = data[0] if isinstance(data, list) and data else data
             if isinstance(err_item, dict) and "Error Message" in err_item:
