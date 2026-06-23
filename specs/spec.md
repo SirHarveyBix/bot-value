@@ -814,15 +814,18 @@ Certains secteurs ont des structures financières incompatibles avec les métriq
 
 ```
 data_freshness_check():
-    Si dernières données fondamentales > 365 jours :
+    Si dernières données fondamentales > 450 jours :
         Ajouter flag "⚠️ Données fondamentales potentiellement périmées"
         Maintenir dans le ranking mais alerter l'utilisateur
 
-    Si dernières données > 450 jours :
+    Si dernières données > 700 jours :
         Exclure du ranking final
+
+    Si dernières données > 365 jours (log DEBUG uniquement, pas de Telegram) :
+        Visibilité opérationnelle pour exercices fiscaux décalés
 ```
 
-> **Note** : FMP `income-statement?limit=3` retourne des bilans **annuels** (pas trimestriels). Le dernier bilan d'une entreprise à exercice non-décembrien (ex: MU=août, AMAT=octobre) peut dater de ~270 jours même si les données sont à jour. Seuils 365/450 jours calibrés pour cette réalité.
+> **Note seuils (décision 2026-06-23 — Trader/PO/Lead Dev)** : FMP `income-statement?limit=3` retourne des bilans **annuels** (pas trimestriels). Une entreprise à exercice fiscal en août (ex: MU, Nike, Salesforce) a son dernier bilan daté à ~270 jours en mai — données parfaitement fraîches. Les seuils spec initiaux (365j warning / 450j exclusion) généraient des faux positifs massifs sur ces entreprises. Seuils opérationnels : **450j warning / 700j exclusion** (config `data_freshness_warning_days` / `data_freshness_exclusion_days`). Log DEBUG interne à 365j pour visibilité sans alerte Telegram.
 
 ### 5.1b Sanity Check Gate (intégrité des prix)
 

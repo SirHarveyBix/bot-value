@@ -10,7 +10,7 @@ scanner:
   min_price: 5.0
   max_tickers_per_sector: 3
   max_data_age_days: 180
-  min_valid_data_ratio: 0.15
+  min_valid_data_ratio: 0.60
   inter_request_delay: 1.0
   max_workers_universe: 4
   fmp_api_key: ${FMP_API_KEY}
@@ -28,8 +28,8 @@ scanner:
   min_universe_size: 100
   telegram_max_chars: 4096
   min_tickers_intra_sector: 3
-  data_freshness_warning_days: 450
-  data_freshness_exclusion_days: 700
+  data_freshness_warning_days: 450 # IS/BS FMP annuels — exercice fiscal décalé (ex: MU=août) → 270j normal (spec originale: 365)
+  data_freshness_exclusion_days: 700 # Absorbe bilan fiscal décalé + délai publication FMP (spec originale: 450)
   earnings_window_days: 14
   exit_rank_threshold: 15
   exit_score_threshold: 70.0

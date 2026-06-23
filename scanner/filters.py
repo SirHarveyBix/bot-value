@@ -122,6 +122,10 @@ def data_freshness_check(ticker_info):
     if age_days > warning_age:
         return True, True, f"Données potentiellement périmées ({age_days} j)"
 
+    # Log DEBUG à 365j : visibilité sans alerte Telegram (exercice fiscal décalé = normal jusqu'à 450j)
+    if age_days > 365:
+        logger.debug(f"Données fondamentales > 365j ({age_days}j) — dans la plage normale pour exercice fiscal décalé")
+
     return True, False, None
 
 
