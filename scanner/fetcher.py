@@ -247,6 +247,47 @@ def _roe_from_yfinance(symbol: str) -> float | None:
     return sum(roes) / len(roes) if roes else None
 
 
+def _fetch_yfinance_info_sync(symbol: str) -> dict | None:
+    """Fallback fondamentaux complets via yfinance quand FMP retourne 402/None.
+
+    Appelé via asyncio.to_thread (yfinance est synchrone).
+    """
+    try:
+        info = yf.Ticker(symbol).info
+        if not info or info.get("quoteType") == "NONE":
+            return None
+        total_debt = info.get("totalDebt")
+        total_cash = info.get("totalCash")
+        net_debt = (total_debt - total_cash) if (total_debt is not None and total_cash is not None) else total_debt
+        return {
+            "symbol": symbol,
+            "longName": info.get("longName"),
+            "sector": normalize_sector_name(info.get("sector")),
+            "marketCap": info.get("marketCap"),
+            "roe_ttm": info.get("returnOnEquity"),
+            "roe_3y": None,
+            "roicTTM": None,
+            "operatingMargins": info.get("operatingMargins"),
+            "totalDebt": total_debt,
+            "totalCash": total_cash,
+            "netDebt": net_debt,
+            "ebitda": info.get("ebitda"),
+            "freeCashflow": info.get("freeCashflow"),
+            "forwardPE": info.get("forwardPE"),
+            "enterpriseToEbitda": info.get("enterpriseToEbitda"),
+            "pegRatio": info.get("pegRatio"),
+            "surprise_pct": None,
+            "surprise_date": None,
+            "analyst_revision_3m": None,
+            "mostRecentQuarter": info.get("mostRecentQuarter"),
+            "bookValuePerShare": info.get("bookValue"),
+            "source": "yfinance",
+        }
+    except Exception as e:
+        logger.warning(f"_fetch_yfinance_info_sync {symbol}: {e}")
+        return None
+
+
 async def fetch_fmp_data(client, symbol):
     """
     Récupère les fondamentaux institutionnels via Financial Modeling Prep (httpx async).
@@ -421,10 +462,17 @@ async def fetch_ticker_info(symbol, client=None):
     if client:
         info = await fetch_fmp_data(client, symbol)
 
+    if info is None:
+        logger.info(f"FMP indisponible pour {symbol} — fallback yfinance fondamentaux")
+        info = await asyncio.to_thread(_fetch_yfinance_info_sync, symbol)
+        if info is not None:
+            roe_3y = await asyncio.to_thread(_roe_from_yfinance, symbol)
+            if roe_3y is not None:
+                info["roe_3y"] = roe_3y
+
     if info and info.get("roe_3y") is not None:
         cache.set("fundamentals", symbol, info)
     elif info:
-        # roe_3y=None (ban yfinance ou FMP plan gap) — pas de mise en cache pour forcer retry au prochain scan
         logger.warning(f"fetch_ticker_info {symbol}: roe_3y=None, résultat non mis en cache (retry au prochain scan)")
     return info
 
