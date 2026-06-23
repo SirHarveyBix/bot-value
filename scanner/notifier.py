@@ -102,9 +102,11 @@ async def notify_fmp_unavailable():
         logger.warning("Notifications Telegram désactivées (token manquant).")
         return
     msg = (
-        "⚠️ <b>Sniper FMP indisponible</b>\n"
-        "<i>Aucune clé API valide ou erreur 5xx persistante après 2 retries.\n"
-        "Scan arrêté — aucun signal émis.</i>"
+        "⚠️ <b>Sniper FMP indisponible — scan arrêté</b>\n"
+        "<i>Causes possibles : clé API manquante, erreur 5xx persistante (2 retries), "
+        "quota journalier FMP dépassé (plan Starter : 250 calls/j), "
+        "ou budget interne atteint (max 175 calls/scan).\n"
+        "Aucun signal émis. Prochain scan automatique demain à 09h35 ET.</i>"
     )
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
@@ -127,7 +129,7 @@ async def notify_vix_unavailable(reason: str = "serie_vide"):
         "serie_vide": "La série VIX ou SPY ne contient aucune valeur valide après filtrage NaN/0.",
         "spy_plat": "SPY retourné par yfinance est suspect : série quasi-plate (données stale). Probable ban IP yfinance.",
         "indices_vides": "yfinance n'a retourné aucune donnée pour SPY/VIX (DataFrame vide).",
-    }.get(reason, "Erreur inconnue Market Gate.")
+    }[reason]
     msg = (
         f"⚠️ <b>Market Gate — scan annulé</b>\n"
         f"<code>{reason}</code> : {detail}\n"
@@ -342,6 +344,7 @@ async def notify_error(module: str, error: str) -> None:
     """Alerte Telegram pour toute erreur critique de scan (SC-004)."""
     bot, chat_id = _get_bot()
     if not bot:
+        logger.warning("Notifications Telegram désactivées (token manquant).")
         return
     msg = (
         f"🚨 <b>ValueMomentum — Erreur critique</b>\n"
@@ -356,6 +359,7 @@ async def notify_universe_too_small(count: int, minimum: int) -> None:
     """Alerte Telegram si l'univers éligible est trop petit pour un scan fiable."""
     bot, chat_id = _get_bot()
     if not bot:
+        logger.warning("Notifications Telegram désactivées (token manquant).")
         return
     msg = (
         f"⚠️ <b>Univers trop petit — scan annulé</b>\n"
@@ -493,7 +497,8 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                                         "SELECT scan_date, market_regime, spy_price, vix FROM scans ORDER BY scan_date DESC LIMIT 1"
                                     ).fetchone()
                                     signal_count = conn.execute(
-                                        "SELECT COUNT(*) FROM signals WHERE scan_date = (SELECT MAX(scan_date) FROM signals)"
+                                        "SELECT COUNT(*) FROM signals WHERE scan_date = ?",
+                                        (scan_row[0] if scan_row else None,),
                                     ).fetchone()
                                     total_scans = conn.execute("SELECT COUNT(*) FROM scans").fetchone()
                                     return (
@@ -523,7 +528,7 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                             in_progress_str = " | ⏳ scan en cours" if _scan_in_progress else ""
                             status_msg = (
                                 f"📌 <b>Dernier scan : {scan_date}</b> (il y a {age_str}){in_progress_str}\n"
-                                f"Régime : {regime_label} | SPY : {spy:.2f} | VIX : {vix:.1f}\n"
+                                f"Régime : {regime_label} | SPY : {f'{spy:.2f}' if spy is not None else 'N/A'} | VIX : {f'{vix:.1f}' if vix is not None else 'N/A'}\n"
                                 f"Signaux émis : {signal_count} | Scans total : {total_scans}\n"
                                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                 "Commandes : /scan /status /help"
@@ -600,6 +605,31 @@ async def poll_telegram_commands(run_scanner_fn) -> None:
                             "Pondération inverse-volatilité sur 63 jours. Les titres moins volatils reçoivent un poids plus élevé pour équilibrer le risque du portefeuille."
                         )
                         await send_message_safe(bot, chat_id, aide3, parse_mode="HTML")
+                        await asyncio.sleep(1.0)
+
+                        aide4 = (
+                            "🔌 <b>Sources de données</b>\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            "\n"
+                            "📈 <b>yfinance</b> (gratuit, sans clé)\n"
+                            "  • Cours OHLCV sur 1 an (500 tickers par chunks de 100)\n"
+                            "  • VIX (^VIX) et SPY pour le Market Gate\n"
+                            "  • ROE 3 ans (fallback si FMP absent)\n"
+                            "  • Limite : throttling IP possible (ban temporaire 429)\n"
+                            "\n"
+                            "🏦 <b>FMP — Financial Modeling Prep</b> (plan Starter, 250 calls/j)\n"
+                            "  • Ratios TTM : ROE, ROIC, marge opé, FCF Yield, dette/EBITDA\n"
+                            "  • Key Metrics TTM : EV/EBITDA, PEG\n"
+                            "  • Profil entreprise : secteur, cap. boursière\n"
+                            "  • Income Statement &amp; Balance Sheet (3 ans) : P/E, surprise earnings\n"
+                            "  • Insider Trading : achats dirigeants (90 derniers jours)\n"
+                            "  • Budget interne : max 175 calls/scan (disjoncteur BF-010)\n"
+                            "\n"
+                            "🗂 <b>Univers</b>\n"
+                            "  • 500 tickers US sélectionnés (fichier statique)\n"
+                            "  • Rechargé manuellement via refresh_universe"
+                        )
+                        await send_message_safe(bot, chat_id, aide4, parse_mode="HTML")
 
                 except Exception as e:
                     logger.warning(f"Erreur traitement update {update.update_id}: {e}")
