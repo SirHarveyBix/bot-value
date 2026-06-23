@@ -74,7 +74,7 @@ SECTOR_ETF_NAMES: dict[str, str] = {
 
 
 class FMPUnavailableError(Exception):
-    """Levée quand FMP est inaccessible (clé absente ou 5xx après fmp_max_retries tentatives)."""
+    """Levée quand FMP est inaccessible (clé absente, 401/403, ou 5xx persistant). HTTP 402/404 = skip ticker, pas levée."""
 
     pass
 
@@ -295,10 +295,11 @@ async def fetch_fmp_data(client, symbol):
             if not body:
                 parsed.append(None)
                 continue
-            if resp.status_code >= 400:
-                raise FMPUnavailableError(
-                    f"FMP HTTP {resp.status_code} pour {symbol}: {body[:200]}"
-                )
+            if resp.status_code in (401, 403):
+                raise FMPUnavailableError(f"FMP HTTP {resp.status_code} pour {symbol}: {body[:200]}")
+            elif resp.status_code >= 400:
+                logger.warning(f"FMP HTTP {resp.status_code} pour {symbol} — ticker skippé: {body[:100]}")
+                return None
             try:
                 data = resp.json()
             except Exception as json_err:
