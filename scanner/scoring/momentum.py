@@ -52,7 +52,7 @@ def calculate_momentum_metrics(prices_df, info, sector_prices_df=None):
         # v1.1 — Momentum ajusté volatilité : return_6m / σ_daily_6M (Daniel & Moskowitz 2016)
         momentum_adj = None
         if perf_6m is not None and len(close) >= 126:
-            daily_returns = close.iloc[-126:].pct_change().dropna()
+            daily_returns = close.iloc[-126:].pct_change(fill_method=None).dropna()
             sigma_6m = float(daily_returns.std())
             effective_vol = max(sigma_6m, VOLATILITY_FLOOR)
             momentum_adj = perf_6m / effective_vol

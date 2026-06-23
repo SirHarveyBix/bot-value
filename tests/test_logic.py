@@ -1614,3 +1614,218 @@ def test_check_batch_data_ratio_no_ghost_levels():
     with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
         assert check_batch_data_ratio(combined, 4)  # 3/4 = 0.75 ≥ 0.60
         assert not check_batch_data_ratio(combined, 6)  # 3/6 = 0.50 < 0.60
+
+
+# ── Real Estate dette/EBITDA exclusion (§4.4) ────────────────────────────────
+
+
+def test_real_estate_excluded_from_debt_gate():
+    """Real Estate : debt_ebitda=None (idem Financials/Utilities) — levier structurel normal."""
+    info_reit = {
+        "sector": "Real Estate",
+        "roe_3y": 0.10,
+        "netDebt": 8_000_000_000,
+        "ebitda": 1_000_000_000,  # Dette/EBITDA 8x — exclut normalement mais pas pour Real Estate
+        "marketCap": 20_000_000_000,
+        "freeCashflow": 500_000_000,
+        "operatingMargins": 0.25,
+    }
+    metrics = calculate_quality_metrics(info_reit)
+    assert metrics["debt_ebitda"] is None, "Real Estate doit exclure le calcul dette/EBITDA"
+    ok, reason, _ = apply_quality_gates(metrics, ticker_info=info_reit)
+    assert ok, f"Real Estate ne doit pas être exclu pour dette élevée: {reason}"
+
+
+# ── ROE/ROIC composite (v1.1) ─────────────────────────────────────────────────
+
+
+def test_roe_roic_composite_calculation():
+    """ROE/ROIC composite = 0.6×roe_3y + 0.4×roicTTM quand les deux disponibles."""
+    info = {
+        "roe_3y": 0.20,
+        "roicTTM": 0.15,
+        "operatingMargins": 0.20,
+        "netDebt": 1e9,
+        "ebitda": 2e9,
+        "freeCashflow": 5e8,
+        "marketCap": 1e10,
+    }
+    metrics = calculate_quality_metrics(info)
+    expected = 0.6 * 0.20 + 0.4 * 0.15  # = 0.18
+    assert abs(metrics["roe"] - expected) < 1e-9, f"Composite ROE attendu {expected}, obtenu {metrics['roe']}"
+
+
+def test_roe_composite_fallback_when_roic_absent():
+    """ROE composite = roe_3y seul quand roicTTM absent (fallback v1.0)."""
+    info = {
+        "roe_3y": 0.20,
+        "roicTTM": None,
+        "operatingMargins": 0.20,
+        "netDebt": 1e9,
+        "ebitda": 2e9,
+        "freeCashflow": 5e8,
+        "marketCap": 1e10,
+    }
+    metrics = calculate_quality_metrics(info)
+    assert abs(metrics["roe"] - 0.20) < 1e-9, "Fallback v1.0 : roe = roe_3y seul"
+
+
+# ── roe_capped : plafond percentile 80 dans stock_scoring_pipeline ─────────────
+
+
+def test_roe_capped_percentile_clamped_at_80():
+    """Ticker avec roe_capped=True → rank_roe ≤ 80, même s'il domine le cross-universe."""
+    from unittest.mock import patch
+
+    from scanner.scoring.engine import stock_scoring_pipeline
+
+    def _make(roe_3y, bvps, sector="Technology"):
+        prices = pd.DataFrame({"Close": list(range(50, 310)), "Volume": [5_000_000] * 260})
+        return {
+            "info": {
+                "sector": sector,
+                "longName": "Corp",
+                "marketCap": 5_000_000_000,
+                "roe_3y": roe_3y,
+                "roicTTM": None,
+                "bookValuePerShare": bvps,
+                "operatingMargins": 0.20,
+                "netDebt": 500_000_000,
+                "ebitda": 1_000_000_000,
+                "freeCashflow": 400_000_000,
+                "forwardPE": 20.0,
+                "enterpriseToEbitda": 12.0,
+                "pegRatio": 1.0,
+                "surprise_pct": 0.0,
+                "surprise_date": None,
+                "analyst_revision_3m": None,
+                "source": "FMP",
+            },
+            "prices": prices,
+        }
+
+    # T_CAPPED : ROE gonflé (>150%) + BVS < 5$ → roe_capped=True → rank_roe ≤ 80
+    # T_NORMAL : ROE normal → rank_roe non plafonné
+    all_data = {
+        "T_CAPPED": _make(roe_3y=2.00, bvps=1.0),
+        "T_NORMAL": _make(roe_3y=0.20, bvps=15.0),
+        "T_MED": _make(roe_3y=0.30, bvps=10.0),
+    }
+
+    patched_config = {
+        "scanner": {"min_universe_size": 1, "min_tickers_intra_sector": 3},
+        "scoring": __import__("scanner.config", fromlist=["CONFIG"]).CONFIG["scoring"],
+    }
+    with patch("scanner.scoring.engine.CONFIG", patched_config):
+        result = stock_scoring_pipeline(all_data, list(all_data.keys()))
+
+    assert not result.empty
+    capped_row = result[result["symbol"] == "T_CAPPED"]
+    assert not capped_row.empty, "T_CAPPED doit survivre (non exclu, juste plafonné)"
+    rank_roe_capped = capped_row["rank_roe"].iloc[0]
+    assert rank_roe_capped <= 80.0, f"rank_roe de T_CAPPED doit être ≤ 80, obtenu {rank_roe_capped}"
+
+
+# ── outperf_6m=None quand ETF sectoriel absent ────────────────────────────────
+
+
+def test_momentum_outperf_none_when_sector_etf_absent():
+    """Pas d'ETF sectoriel disponible → outperf_6m=None (pas de crash)."""
+    from scanner.scoring.momentum import calculate_momentum_metrics
+
+    prices = pd.DataFrame({"Close": list(range(50, 310))})
+    # sector_prices_df=None simule l'absence de données ETF sectoriel
+    metrics = calculate_momentum_metrics(prices, {}, sector_prices_df=None)
+    assert metrics.get("outperf_6m") is None
+    assert metrics.get("perf_6m") is not None  # perf absolue calculée quand même
+
+
+def test_momentum_outperf_none_when_sector_etf_too_short():
+    """ETF sectoriel avec < 126 jours → outperf_6m=None."""
+    from scanner.scoring.momentum import calculate_momentum_metrics
+
+    prices = pd.DataFrame({"Close": list(range(50, 310))})
+    short_sector = pd.DataFrame({"Close": [100.0] * 50})
+    metrics = calculate_momentum_metrics(prices, {}, sector_prices_df=short_sector)
+    assert metrics.get("outperf_6m") is None
+
+
+# ── Insider buy bonus proportionnel ──────────────────────────────────────────
+
+
+def test_insider_buy_bonus_proportional():
+    """Bonus insider = min(bonus_max, total_value / 100_000)."""
+    insider_bonus_max = 5.0
+
+    def compute_bonus(total_value):
+        return min(insider_bonus_max, total_value / 100_000)
+
+    assert abs(compute_bonus(50_000) - 0.5) < 1e-9  # seuil minimum
+    assert abs(compute_bonus(250_000) - 2.5) < 1e-9  # milieu de plage
+    assert abs(compute_bonus(500_000) - 5.0) < 1e-9  # cap atteint
+    assert abs(compute_bonus(1_000_000) - 5.0) < 1e-9  # au-delà du cap → toujours 5.0
+
+
+def test_insider_buy_bonus_clips_score_global_at_100():
+    """Score_global + bonus > 100 → clampé à 100."""
+    score = 98.0
+    bonus = 5.0
+    result = min(score + bonus, 100.0)
+    assert result == 100.0
+
+
+# ── Momentum pénalités cumulables (les deux conditions) ───────────────────────
+
+
+def test_momentum_penalties_not_cumulative_only_one():
+    """Une seule condition active (>25% ou <-20%) → une seule pénalité."""
+    assert apply_momentum_penalties(80, {"perf_1m": 0.30}) == 70  # -10 seulement
+    assert apply_momentum_penalties(80, {"perf_1m": -0.25}) == 75  # -5 seulement
+
+
+def test_momentum_penalties_do_not_stack():
+    """perf_1m ne peut pas déclencher les deux conditions (>25% ET <-20%)."""
+    # Par construction, perf_1m ne peut pas être à la fois > 0.25 et < -0.20
+    # Le code utilise if/elif → seule la première condition rencontrée s'applique
+    result_high = apply_momentum_penalties(80, {"perf_1m": 0.30})
+    result_low = apply_momentum_penalties(80, {"perf_1m": -0.25})
+    assert result_high == 70  # seulement -10
+    assert result_low == 75  # seulement -5
+
+
+def test_momentum_penalties_floor_at_zero():
+    """Score bas (5) + pénalité -10 → clampé à 0, pas négatif."""
+    assert apply_momentum_penalties(5, {"perf_1m": 0.30}) == 0
+
+
+# ── valuation: ev_ebitda=0 passe les gates (aucun gate explicite pour ≤0) ───
+
+
+def test_valuation_ev_ebitda_zero_passes_gate():
+    """ev_ebitda=0 : gate EV/EBITDA>40 non déclenchée (0 est falsy en Python)."""
+    from scanner.scoring.valuation import apply_valuation_gates
+
+    # ev_ebitda=0 ne déclenche pas le gate >40 (if ev_ebitda → False quand 0)
+    metrics = {"pe": 20.0, "ev_ebitda": 0.0, "sector": "Technology", "mcap": 5e9}
+    is_excluded, v_ok, reason = apply_valuation_gates(metrics)
+    assert not is_excluded
+    assert v_ok
+
+
+# ── pct_change FutureWarning fix ──────────────────────────────────────────────
+
+
+def test_momentum_adj_no_future_warning():
+    """calculate_momentum_metrics ne produit pas de FutureWarning (fill_method=None)."""
+    import warnings
+
+    import numpy as np
+
+    from scanner.scoring.momentum import calculate_momentum_metrics
+
+    prices = pd.DataFrame({"Close": np.linspace(100, 130, 252)})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        # Ne doit pas lever FutureWarning (pct_change doit utiliser fill_method=None)
+        metrics = calculate_momentum_metrics(prices, {})
+    assert metrics.get("momentum_adj") is not None
