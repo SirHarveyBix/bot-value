@@ -9,6 +9,7 @@ from freezegun import freeze_time
 from scanner.notifier import (
     _build_pinned_summary,
     escape_html,
+    notify_vix_unavailable,
     pin_message_safe,
     send_message_safe,
     truncate_message_html_safe,
@@ -205,6 +206,48 @@ def _make_stock_row(symbol="AAPL", insider_value=None, insider_date=None):
             }
         ]
     )
+
+
+# ── notify_vix_unavailable ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason,expected_fragment",
+    [
+        ("absent", "absent"),
+        ("serie_vide", "serie_vide"),
+        ("spy_plat", "spy_plat"),
+        ("indices_vides", "indices_vides"),
+    ],
+)
+async def test_notify_vix_unavailable_sends_message(reason, expected_fragment):
+    """notify_vix_unavailable envoie un message Telegram contenant la raison."""
+    captured = []
+
+    async def fake_send(bot, chat_id, text, **kwargs):
+        captured.append(text)
+        return MagicMock(message_id=1)
+
+    with (
+        patch("scanner.notifier._get_bot", return_value=(MagicMock(), "123")),
+        patch("scanner.notifier.send_message_safe", side_effect=fake_send),
+    ):
+        await notify_vix_unavailable(reason)
+
+    assert len(captured) == 1
+    assert expected_fragment in captured[0]
+    assert "Market Gate" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_notify_vix_unavailable_no_token():
+    """Token absent → aucun message envoyé, pas de crash."""
+    with patch("scanner.notifier._get_bot", return_value=(None, None)):
+        await notify_vix_unavailable("serie_vide")
+
+
+# ── Insider buying dans le message Telegram ───────────────────────────────────
 
 
 @pytest.mark.asyncio

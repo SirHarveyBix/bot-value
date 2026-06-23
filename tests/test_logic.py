@@ -366,7 +366,7 @@ def test_sector_none_exclusion():
                 "sector": None,
                 "longName": "Apple Inc.",
                 "marketCap": 3_000_000_000_000,
-                "returnOnEquity": 1.47,
+                "roe_3y": 1.47,
                 "operatingMargins": 0.31,
                 "totalDebt": 97_000_000_000,
                 "totalCash": None,
@@ -445,7 +445,7 @@ def test_intra_sector_fallback():
                 "sector": sector,
                 "longName": "Test Corp",
                 "marketCap": 5_000_000_000,
-                "returnOnEquity": 0.20,
+                "roe_3y": 0.20,
                 "operatingMargins": 0.15,
                 "totalDebt": 1_000_000_000,
                 "totalCash": None,
@@ -541,22 +541,6 @@ def test_first_seen_date_preserved(tmp_path):
         second_date = get_first_seen_date(conn, "AAPL")
         conn.close()
         assert second_date == first_date
-
-
-# T041
-def test_totalcash_none_after_fix():
-    """Réponse FMP mockée → totalCash est None, netDebt mappé correctement depuis netDebtTTM."""
-    mocked_fmp_response = {
-        "netDebtTTM": 52_000_000_000,
-        "ebitdaTTM": 130_000_000_000,
-        "totalDebtTTM": 97_000_000_000,
-    }
-    assert mocked_fmp_response.get("netDebtTTM") == 52_000_000_000
-    # Simule le mapping post-fix : totalCash doit être None
-    total_cash = None  # Bug 2 fix : k.get("netDebtTTM") → None
-    net_debt = mocked_fmp_response.get("netDebtTTM")
-    assert total_cash is None
-    assert net_debt == 52_000_000_000
 
 
 # T029b — test compute_analyst_revision_3m
