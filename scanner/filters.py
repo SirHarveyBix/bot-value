@@ -186,17 +186,17 @@ def check_batch_data_ratio(price_data, eligible_count):
 
 def check_data_ratio(all_data, eligible_count):
     """
-    Vérifie si on a assez de données valides pour produire un rapport.
+    Vérifie si on a assez de tickers FMP scorables pour produire un rapport.
+    Plancher absolu (pas ratio) : plan gratuit FMP retourne ~10/30 tickers valides normalement.
     """
     if eligible_count == 0:
         return False
 
     valid_count = sum(1 for d in all_data.values() if d.get("info") and not d["info"].get("error"))
-    ratio = valid_count / eligible_count
+    min_tickers = CONFIG["scanner"].get("min_scored_tickers", 5)
 
-    min_ratio = CONFIG["scanner"].get("min_valid_data_ratio", 0.60)
-    if ratio < min_ratio:
-        logger.error(f"Ratio de données valides trop faible: {ratio:.2%} (min {min_ratio:.0%})")
+    if valid_count < min_tickers:
+        logger.error(f"Tickers FMP valides insuffisants: {valid_count} (min {min_tickers})")
         return False
     return True
 

@@ -10,7 +10,8 @@ scanner:
   min_price: 5.0
   max_tickers_per_sector: 3
   max_data_age_days: 180
-  min_valid_data_ratio: 0.60
+  min_valid_data_ratio: 0.60  # yfinance batch prices (check_batch_data_ratio)
+  min_scored_tickers: 5       # FMP fundamentals — plancher absolu (plan gratuit: ~10/30 tickers valides normal)
   inter_request_delay: 1.0
   max_workers_universe: 4
   fmp_api_key: ${FMP_API_KEY}

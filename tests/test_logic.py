@@ -649,18 +649,19 @@ def test_check_batch_data_ratio_zero_eligible():
 
 
 def test_check_data_ratio_pass():
-    """7 valides / 10 → ratio=0.7 ≥ 0.6 → True."""
+    """7 tickers FMP valides ≥ min=5 → True."""
     all_data = {f"T{i}": {"info": {"longName": f"Corp{i}"}} for i in range(7)}
     all_data.update({f"X{i}": {"info": None} for i in range(3)})
-    assert check_data_ratio(all_data, 10)
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_scored_tickers": 5}}):
+        assert check_data_ratio(all_data, 10)
 
 
 def test_check_data_ratio_fail():
-    """4 valides / 10 → ratio=0.4 < 0.6 → False."""
+    """4 tickers FMP valides < min=5 → False."""
     all_data = {f"T{i}": {"info": {"longName": f"Corp{i}"}} for i in range(4)}
-    all_data.update({f"X{i}": {"info": None} for i in range(6)})
-    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
-        assert not check_data_ratio(all_data, 10)
+    all_data.update({f"X{i}": {"info": None} for i in range(26)})
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_scored_tickers": 5}}):
+        assert not check_data_ratio(all_data, 30)
 
 
 def test_check_data_ratio_zero_eligible():
@@ -668,11 +669,11 @@ def test_check_data_ratio_zero_eligible():
     assert not check_data_ratio({}, 0)
 
 
-def test_check_data_ratio_mix_fmp_yfinance():
-    """20 tickers source=yfinance + 10 source=FMP → 30/30 valides → True."""
-    all_data = {f"YF{i}": {"info": {"source": "yfinance", "longName": f"Corp{i}"}} for i in range(20)}
-    all_data.update({f"FMP{i}": {"info": {"source": "FMP", "longName": f"Corp{i}"}} for i in range(10)})
-    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_valid_data_ratio": 0.60}}):
+def test_check_data_ratio_free_plan_scenario():
+    """10 tickers FMP valides / 30 shortlist (plan gratuit) → 10 ≥ min=5 → True."""
+    all_data = {f"FMP{i}": {"info": {"source": "FMP", "longName": f"Corp{i}"}} for i in range(10)}
+    all_data.update({f"S{i}": {"info": None} for i in range(20)})
+    with patch.dict("scanner.filters.CONFIG", {"scanner": {"min_scored_tickers": 5}}):
         assert check_data_ratio(all_data, 30)
 
 
