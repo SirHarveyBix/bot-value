@@ -13,7 +13,7 @@ all_data: dict[str, {
     "info": {
         # Identité
         "symbol": str,
-        "source": "FMP",                    # toujours FMP en V1 (pas de yfinance fallback)
+        "source": "FMP" | "yfinance",       # FMP si disponible, yfinance si FMP retourne 402/None
         "longName": str | None,
         "sector": str | None,               # None → exclusion pipeline Actions (sector_missing)
         "marketCap": int | None,
@@ -23,7 +23,7 @@ all_data: dict[str, {
         "roe_3y": float | None,             # ROE moyen 3 ans (income-statement 3 périodes)
         "operatingMargins": float | None,
         "totalDebt": float | None,
-        "totalCash": None,                  # Toujours None (Bug 2 fix — FMP n'expose pas totalCash)
+        "totalCash": None | float,          # None si source=FMP (n'expose pas totalCash) ; float si source=yfinance
         "netDebt": float | None,            # netDebtTTM via key-metrics-ttm
         "ebitda": float | None,
         "freeCashflow": float | None,       # freeCashFlowPerShareTTM × sharesOutstanding
@@ -40,7 +40,9 @@ all_data: dict[str, {
 
         # Méta
         "book_value_per_share": float | None,  # pour détection ROE gonflé par buybacks
-    } | None,                               # None = FMPUnavailableError (toute la shortlist concernée)
+        # Champs absents si source=yfinance (non disponibles)
+        "roicTTM": float | None,           # None si source=yfinance
+    } | None,                               # None = FMPUnavailableError (401/403/5xx) OU yfinance aussi indisponible
 
     "prices": pd.DataFrame | None          # OHLCV, index datetime UTC, colonnes Open/High/Low/Close/Volume
 }]
@@ -124,16 +126,16 @@ Propagation : `fetch_fmp_data()` → `fetch_ticker_info()` → `fetch_all_data()
 
 ## FMP Endpoints Budget (30 tickers) — API `/stable/` (BF-010)
 
-| Endpoint (`/stable/`)                                     | Appels  | Données extraites                         |
-| --------------------------------------------------------- | ------- | ----------------------------------------- |
-| `ratios-ttm?symbol={symbol}`                              | 30      | P/E, EV/EBITDA, marge op., FCF yield, PEG |
-| `key-metrics-ttm?symbol={symbol}`                         | 30      | ROIC TTM, métriques complémentaires       |
-| `profile?symbol={symbol}`                                 | 30      | Secteur GICS, market cap, nom             |
-| `income-statement?symbol={symbol}&limit=3`                | 30      | ROE moyen 3 ans (bilans annuels)          |
-| `balance-sheet-statement?symbol={symbol}&limit=3`         | 30      | totalDebt, totalCash                      |
-| ~~`earnings-surprises/{symbol}`~~                         | ~~30~~  | 404 plan gratuit — supprimé (BF-010)      |
-| ~~`analyst-estimates/{symbol}?period=quarter&limit=3`~~   | ~~30~~  | 402 plan gratuit — supprimé (BF-010)      |
-| **Total nominal**                                         | **150** | **+ 25 retry margin = 175 hard limit**    |
+| Endpoint (`/stable/`)                                   | Appels  | Données extraites                         |
+| ------------------------------------------------------- | ------- | ----------------------------------------- |
+| `ratios-ttm?symbol={symbol}`                            | 30      | P/E, EV/EBITDA, marge op., FCF yield, PEG |
+| `key-metrics-ttm?symbol={symbol}`                       | 30      | ROIC TTM, métriques complémentaires       |
+| `profile?symbol={symbol}`                               | 30      | Secteur GICS, market cap, nom             |
+| `income-statement?symbol={symbol}&limit=3`              | 30      | ROE moyen 3 ans (bilans annuels)          |
+| `balance-sheet-statement?symbol={symbol}&limit=3`       | 30      | totalDebt, totalCash                      |
+| ~~`earnings-surprises/{symbol}`~~                       | ~~30~~  | 404 plan gratuit — supprimé (BF-010)      |
+| ~~`analyst-estimates/{symbol}?period=quarter&limit=3`~~ | ~~30~~  | 402 plan gratuit — supprimé (BF-010)      |
+| **Total nominal**                                       | **150** | **+ 25 retry margin = 175 hard limit**    |
 
 Circuit-breaker par ticker : 2 retries max. Après 2 échecs 5xx → skip + flag pour ce ticker uniquement.
 
