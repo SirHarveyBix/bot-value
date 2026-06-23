@@ -532,8 +532,8 @@ async def fetch_all_data(tickers, etfs=None, prices_batch=None):
 
                 prices = prices_batch[symbol] if symbol in present else None
                 results[symbol] = {"info": info, "prices": prices}
-    except FMPUnavailableError:
-        await notify_fmp_unavailable()
+    except FMPUnavailableError as e:
+        await notify_fmp_unavailable(reason=str(e))
         raise
 
     for s_etf in list(set(etfs + SECTOR_ETFS)):

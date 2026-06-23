@@ -95,18 +95,16 @@ async def notify_panic(vix: float, spy: float, ema200: float):
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
 
-async def notify_fmp_unavailable():
+async def notify_fmp_unavailable(reason: str = ""):
     """Envoie le message Telegram FMP indisponible (Lacune 9)."""
     bot, chat_id = _get_bot()
     if not bot:
         logger.warning("Notifications Telegram désactivées (token manquant).")
         return
+    detail = f"\n<code>{reason}</code>" if reason else ""
     msg = (
-        "⚠️ <b>Sniper FMP indisponible — scan arrêté</b>\n"
-        "<i>Causes possibles : clé API manquante, erreur 5xx persistante (2 retries), "
-        "quota journalier FMP dépassé (plan Starter : 250 calls/j), "
-        "ou budget interne atteint (max 175 calls/scan).\n"
-        "Aucun signal émis. Prochain scan automatique demain à 09h35 ET.</i>"
+        f"⚠️ <b>Sniper FMP indisponible — scan arrêté</b>{detail}\n"
+        "<i>Aucun signal émis. Prochain scan automatique demain à 09h35 ET.</i>"
     )
     await send_message_safe(bot, chat_id, truncate_message_html_safe(msg), parse_mode="HTML")
 
