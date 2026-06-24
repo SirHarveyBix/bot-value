@@ -1,6 +1,6 @@
 # Spec — ValueMomentum Scanner
 
-### Version 1.0 (Production) — v1.1 en cours — Document de référence pour développement IA
+### Version 1.3.0 (Production) — Document de référence pour développement IA
 
 ---
 
@@ -167,8 +167,8 @@ Filtre d'éligibilité strict sur ~700 tickers, scoring sur les 30 meilleurs en 
 
 1. **Given** `marketCap < 2B$` ou `volume_dollar_20j < 5M$` ou `price < 5$`, **When** filtre éligibilité, **Then** ticker exclu, loggé `eligibility_filter`
 2. **Given** `sector = None` (yfinance), **When** pipeline Actions, **Then** exclu avec motif `sector_missing`
-3. **Given** données FMP > 365 jours, **When** ticker dans Top 10, **Then** flag `⚠️ données potentiellement périmées`
-4. **Given** données FMP > 450 jours, **When** ranking final, **Then** ticker exclu du Top 10
+3. **Given** données FMP > 450 jours, **When** ticker dans Top 10, **Then** flag `⚠️ données potentiellement périmées`
+4. **Given** données FMP > 700 jours, **When** ranking final, **Then** ticker exclu du Top 10
 5. **Given** univers post-chalutier < 100 tickers, **When** scoring déclenché, **Then** scan annulé, warning log `universe_too_small`
 6. **Given** secteur < 3 tickers dans la shortlist scorée, **When** ranking intra-secteur, **Then** bascule automatique vers ranking cross-universe
 
@@ -315,7 +315,7 @@ Pour maximiser l'univers tout en garantissant la qualité institutionnelle des s
 > | ~~`analyst-estimates`~~                           | ~~indisponible~~    | 402 plan gratuit — supprimé (BF-010)               |
 > | **Total**                                         | **150 calls/run**   | Nominal — + 25 retry margin = **175 hard limit**   |
 >
-> **SHORTLIST_SIZE = 30 tickers** : 30 × 5 endpoints = 150 calls nominaux + 25 retry margin = **175 hard limit**. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag. Avec cache 27h actif, les retries concernent une minorité de tickers.
+> **SHORTLIST_SIZE = 30 tickers** : 30 × 5 endpoints = 150 calls nominaux + 25 retry margin = **175 hard limit**. Circuit-breaker à **2 retries max** (pas 3) : si un ticker échoue 2 fois → skip + flag. Avec cache 7 jours actif, les retries concernent une minorité de tickers.
 >
 > **Disjoncteur global FMP (hard limit 175 calls)** : Le système DOIT maintenir un compteur global d'appels FMP par run (`fmp_call_counter`). Dès que ce compteur atteint **175 calls**, les fetches FMP des tickers restants sont interrompus immédiatement. Le scoring et le ranking sont finalisés avec les données disponibles à ce moment. Un flag `⚠️ Budget FMP proche du quota — shortlist partielle` est ajouté au message Telegram. Budget : 30 tickers × 5 endpoints = 150 nominal + 25 retry margin = 175 hard limit (BF-010 : API v3→stable, 7→5 endpoints).
 >
@@ -343,10 +343,9 @@ Pour maximiser l'univers tout en garantissant la qualité institutionnelle des s
 
 L'univers est géré via un fichier JSON central (`tickers_universe.json`). Contrairement à la v1 initiale, le système supporte désormais le **rafraîchissement automatique** via `scanner/refresh_universe.py`.
 
-- **S&P 500** : Import automatique depuis Wikipedia.
-- **Nasdaq 100** : Import automatique.
-- **Indices Mondiaux** : _(Roadmap v2 uniquement)_ — NIFTY 50 (.NS), MSCI World, CAC 40, DAX. En v1.0, l'univers est **strictement limité aux actions US** (NYSE / NASDAQ / AMEX). Tout ticker `.NS` ou hors-US présent dans `tickers_universe.json` sera éliminé par le filtre listing — ne pas les inclure pour éviter du fetch inutile.
-- **Mode Explorer** : _(Roadmap v2)_ Import de tableaux Wikipedia via URL custom.
+- **Univers dynamique (v1.3.0+)** : FMP Screener (`/stable/company-screener`) avec filtres d'éligibilité (cap > 2B$, volume > 5M$/j, NYSE/NASDAQ, US) — voir amendment v1.3.0 en préambule Acte 2. CLI : `python -m scanner.refresh_universe screener`.
+- **Indices Mondiaux** : _(Roadmap v2 uniquement)_ — NIFTY 50 (.NS), MSCI World, CAC 40, DAX. En v1.0, l'univers est **strictement limité aux actions US** (NYSE / NASDAQ / AMEX).
+- **Mode Explorer** : _(Roadmap v2)_ — hors-US.
 
 ### 3.2 Filtres d'éligibilité obligatoires (appliqués chaque jour)
 
@@ -371,7 +370,7 @@ Les filtres suivants éliminent les instruments non tradables avant toute analys
 
 ## 3bis. Module 2 — Data Fetcher
 
-### 2.1 Stratégie de fetch asynchrone (Non-bloquant)
+### 3bis.1 Stratégie de fetch asynchrone (Non-bloquant)
 
 Pour garantir que l'Event Loop d'asyncio ne gèle jamais (notamment pour les notifications Telegram et le scheduler), le fetcher utilise une approche hybride :
 
@@ -425,7 +424,7 @@ async with httpx.AsyncClient() as client:
     data = response.json()
 ```
 
-### 2.2 Rate limiting et résilience
+### 3bis.2 Rate limiting et résilience
 
 Le système applique un **Rate Limiting Séquentiel** strict pour éviter le bannissement IP (Erreur 429) :
 
@@ -434,7 +433,7 @@ Le système applique un **Rate Limiting Séquentiel** strict pour éviter le ban
 3. **FMP_MAX_RETRIES** : **2 tentatives maximum** avec backoff exponentiel asynchrone (cf. §2 budget FMP — 3 retries dépasserait le hard limit 175 calls).
 4. **Fallback limité FMP → yfinance** : Si FMP échoue après 2 retries (5xx), le ticker est ignoré. Si FMP retourne IS/BS vide `[]` (plan gap), fallback yfinance autorisé pour `roe_3y` uniquement (FR-003). La distinction indisponibilité/plan-gap est critique — voir §16 contrainte 1.
 
-### 2.3 Validation des données reçues
+### 3bis.3 Validation des données reçues
 
 ```python
 def is_valid_ticker_data(data: dict) -> bool:
@@ -484,14 +483,12 @@ def parse_fmp_response(raw: list | dict, model_class, ticker: str):
 
 > **Pourquoi Pydantic et non un simple `try/except`** : Une validation naïve échoue silencieusement si FMP retourne une string `"N/A"` à la place d'un float. Pydantic convertit les types compatibles et lève une erreur explicite pour les cas irrecouvrables — le ticker est skippé, le pipeline continue.
 
-### 2.4 Cache
+### 3bis.4 Cache
 
 ```python
-CACHE_TTL_FUNDAMENTALS = 27 * 3600   # 27h — voir note race condition ci-dessous
-CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
+CACHE_TTL_FUNDAMENTALS = 7 * 24 * 3600  # 604 800s (7 jours) — fondamentaux trimestriels FMP, quota 250 calls/jour préservé
+CACHE_TTL_PRICE_HISTORY = 4 * 3600      # 4h — prix plus frais pour le momentum
 ```
-
-> **⚠️ Race condition TTL à 24h** : Le scan se déclenche à 09h35 ET. Un cache créé à 09h32 la veille expire exactement à 09h32 le lendemain — 3 minutes _avant_ le prochain scan. Toute la shortlist de 30 tickers déclenche simultanément 150 appels FMP à 09h35 ET (5 endpoints × 30), annulant le bénéfice du cache et consommant la majeure partie du quota en un seul run. TTL à **27h** garantit que le cache reste valide pour le scan suivant, quel que soit le délai d'exécution réel (congestion réseau, retry, heure d'été/hiver). La valeur `97200s` (27×3600) est la valeur de référence dans `config.yaml`.
 
 **Invalidation post-earnings** : si un ticker est dans l'earnings calendar avec date = J-1 (résultats publiés la veille), son cache fondamentaux est invalidé forcément avant le scan.
 
@@ -506,7 +503,7 @@ CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4h — prix plus frais pour le momentum
 }
 ```
 
-### 2.5 Bootstrap tickers_universe.json
+### 3bis.5 Bootstrap tickers_universe.json _(supersédé v1.3.0 — voir amendment Acte 2 : FMP Screener)_
 
 Fichier créé une fois manuellement. Structure :
 
@@ -1515,10 +1512,8 @@ async def fmp_fetch_with_tenacity(client: httpx.AsyncClient, url: str) -> dict:
 Les données fondamentales (P/E, ROE, marges) ne changent pas d'un jour à l'autre entre les publications de résultats. Le fetcher les met en cache pour éviter d'épuiser les 175 calls hard limit par run (BF-010) sur des données déjà récupérées.
 
 ```python
-# Règle de cache — TTL 27h pour éviter la race condition à 24h
-# (scan à 09h35 ET, cache J-1 créé à ~09h32 → expirerait 3min avant le prochain scan)
-CACHE_TTL_FUNDAMENTALS = 27 * 3600   # 97 200 secondes
-CACHE_TTL_PRICE_HISTORY = 4 * 3600   # 4 heures (prix intraday)
+CACHE_TTL_FUNDAMENTALS = 7 * 24 * 3600  # 604 800 secondes (7 jours) — fondamentaux trimestriels FMP, quota 250 calls/jour préservé
+CACHE_TTL_PRICE_HISTORY = 4 * 3600      # 4 heures (prix intraday)
 ```
 
 ### 13.4 Fragilité du Scraping (yfinance)
@@ -1565,7 +1560,7 @@ Pour garantir la fiabilité de la suite de tests sans épuiser les quotas d'API 
 
 **Robustesse (priorité haute — avant premier run prod) :**
 
-- [ ] Pydantic validation stricte réponses FMP — isolation erreur ticker sans corruption pipeline (§3bis.2.3)
+- [ ] Pydantic validation stricte réponses FMP — isolation erreur ticker sans corruption pipeline (§3bis.3)
 - [ ] Logging structuré JSON local (`loguru serialize=True`) **avant** envoi Telegram — évite perte silencieuse de signaux (§6.6)
 - [ ] `aiosqlite` pour requêtes SQLite async — évite freeze Event Loop sur requêtes lourdes (§10)
 - [ ] `tenacity` pour exponential backoff FMP — remplace retry manuel, aligné sur `FMP_MAX_RETRIES=2` (§13.1)
@@ -1621,16 +1616,16 @@ Toutes les constantes métier sont centralisées dans `config.yaml`. Valeurs de 
 | `VIX_PANIC_THRESHOLD`           | 35                | [30, 45]                                                            | §4.0         |
 | `VIX_WARNING_THRESHOLD`         | 25                | [20, 30]                                                            | §4.0         |
 | `MAX_TICKERS_PER_SECTOR`        | 3                 | [1, 10] — 10 = mode alpha pur (risque concentration)                | §5.3         |
-| `DATA_FRESHNESS_WARNING_DAYS`   | 365               | [270, 400] — calibré bilans annuels FMP (BF-028)                    | §5.1         |
-| `DATA_FRESHNESS_EXCLUSION_DAYS` | 450               | [365, 550] — idem, exercices non-décembriens (BF-028)               | §5.1         |
+| `DATA_FRESHNESS_WARNING_DAYS`   | 450               | [365, 550] — calibré bilans annuels FMP (BF-028)                    | §5.1         |
+| `DATA_FRESHNESS_EXCLUSION_DAYS` | 700               | [550, 900] — idem, exercices non-décembriens (BF-028)               | §5.1         |
 | `MAX_WORKERS_UNIVERSE`          | 4                 | [2, 6] — au-delà de 6, risque ban IP yfinance                       | §3.2         |
-| `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                          | §3bis.2.1    |
+| `INTER_REQUEST_DELAY`           | 1.0s              | [0.5, 2.0]                                                          | §3bis.1    |
 | `FMP_MAX_RETRIES`               | 2                 | [1, 3] — **2 max** pour tenir dans le hard limit 175 calls (BF-010) | §2           |
 | `FMP_CALL_BUDGET_HARD_LIMIT`    | 175               | 30 × 5 = 150 nominal + 25 retry margin = 175 hard limit (BF-010)    | §2           |
-| `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429            | §3bis.2.1    |
-| `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                            | §3bis.2.1    |
-| `CACHE_TTL_FUNDAMENTALS`        | 97200s (27h)      | [86400, 172800] — **min 27h** pour éviter race condition 09h35      | §3bis.2.4    |
-| `CACHE_TTL_PRICE_HISTORY`       | 14400s (4h)       | [3600, 86400]                                                       | §3bis.2.4    |
+| `YFINANCE_CHUNK_SIZE`           | 100               | [50, 150] — tickers par batch, au-delà risque ban IP 429            | §3bis.1    |
+| `YFINANCE_CHUNK_DELAY_S`        | 2.0s              | [1.0, 5.0] — pause entre chunks yfinance                            | §3bis.1    |
+| `CACHE_TTL_FUNDAMENTALS`        | 604800s (7 jours) | [86400, 604800] — fondamentaux trimestriels FMP, quota 250 calls/jour préservé | §3bis.4    |
+| `CACHE_TTL_PRICE_HISTORY`       | 14400s (4h)       | [3600, 86400]                                                       | §3bis.4    |
 | `EARNINGS_WINDOW_DAYS`          | 14                | [7, 21]                                                             | §5.2         |
 | `MIN_UNIVERSE_SIZE`             | 100               | [50, 200] — en dessous : percentile ranking invalide, scan annulé   | §4           |
 | `TELEGRAM_MAX_CHARS`            | 4096              | fixe (limite API)                                                   | §6.6         |

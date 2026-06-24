@@ -1,6 +1,6 @@
 # Data Model: ValueMomentum Scanner V1
 
-**Branch**: `001-spec-review-fixes` | **Date**: 2026-05-19
+**Branch**: `main` | **Date**: 2026-05-19
 
 ---
 
@@ -132,7 +132,7 @@ for stmt in NEW_COLS:
 
 **Naming**: `fundamentals_{SYMBOL}.json`, `prices_{SYMBOL}.json`
 
-**TTL**: fondamentaux 27h (`CACHE_TTL_FUNDAMENTALS = 97200` — 24h provoque une race condition : cache créé à 09h32 expire 3 min avant le scan suivant à 09h35), prix 4h (`CACHE_TTL_PRICE_HISTORY = 14400`)
+**TTL**: fondamentaux 7 jours (`CACHE_TTL_FUNDAMENTALS = 604800` — fondamentaux trimestriels, quota FMP 250 calls/jour préservé), prix 4h (`CACHE_TTL_PRICE_HISTORY = 14400`)
 
 **Invalidation post-earnings**: si `surprise_date = J-1`, invalider le cache fondamentaux avant le scan.
 

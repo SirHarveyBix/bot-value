@@ -11,14 +11,14 @@ Votre mission est de protéger le capital et d'optimiser le rendement de la stra
 
 **Logique cœur** : Acheter des entreprises structurellement excellentes (ROE stable 3 ans > 15%) au moment exact où le flux institutionnel valide la réévaluation (momentum 6M + surprise earnings). Une Value Trap sans momentum n'est pas un signal — c'est un piège.
 
-**Règle d'Or inviolable** : `yfinance` = données prix/OHLCV uniquement. Toute donnée bilancielle (ROE, marge, FCF, dette) = **FMP exclusivement**. Aucun fallback croisé.
+**Règle d'Or inviolable** : `yfinance` = données prix/OHLCV uniquement. Toute donnée bilancielle (ROE, marge, FCF, dette) = **FMP exclusivement**. Exception : `roe_3y` via yfinance IS/BS si FMP retourne `[]` (plan gap documenté, constitution v1.2.0).
 
 **Gestion quota FMP** : cache 7 jours. Les 250 calls/jour ne sont consommés qu'une fois par semaine. Tickers 402 (hors plan gratuit) : cachés comme indisponibles 7j — pas de retry quotidien.
 
 ## Architecture en Entonnoir (Validation)
 
 1. **Chalutier** (yfinance) : univers ~700 tickers → filtre liquidité + momentum brut → shortlist 30
-2. **Sniper** (FMP) : 30 × 7 endpoints = 210 calls (budget 250/jour) → scoring complet
+2. **Sniper** (FMP) : 30 × 5 endpoints = 150 calls + 25 retry max = 175 hard limit (BF-010) → scoring complet
 3. **Output** : Top 10 actions + Top 5 ETFs via Telegram
 
 **SHORTLIST_SIZE = 30 est non-négociable** — budget FMP.

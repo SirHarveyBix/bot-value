@@ -54,7 +54,7 @@ Investment signals MUST be rooted in structural quality.
 - **book_value_per_share gates**: `book_value_per_share ≤ 0` → ticker excluded from Quality scoring (ROE is mathematically undefined). `ROE > 150%` with `book_value_per_share < $5` → ROE percentile score capped at 80 + flag `⚠️ ROE possiblement gonflé par buybacks` (buyback-inflated leverage, not operational excellence).
 - **Debt/EBITDA exclusion sectors**: Financials (deposits ≠ normal debt), Real Estate (FFO ≠ GAAP EBITDA), and **Utilities** (structurally high leverage from regulated infrastructure — 5-7x normal and non-predictive of risk) MUST NOT have debt/EBITDA included in Quality scoring. The Quality pillar for these sectors uses 3 sub-criteria: ROE, operating margin, FCF yield.
 - EBITDA ≤ 0 → unconditional exclusion (debt/EBITDA ratio meaningless; business loss-making). Net debt/EBITDA > 6x → unconditional exclusion (excessive balance sheet risk).
-- Fundamental data MUST be verified for freshness: data older than 120 days triggers a warning flag `⚠️ données potentiellement périmées`; data older than 180 days results in automatic exclusion from the final ranking.
+- Fundamental data MUST be verified for freshness: data older than 450 days triggers a warning flag `⚠️ données potentiellement périmées`; data older than 700 days results in automatic exclusion from the final ranking.
 - Tickers with `sector = None` (GICS missing) are excluded from the Actions scoring pipeline — no intra-sector comparison is possible without a valid sector label.
 
 ### III. Market Gate (Survival Priority — Priority Cascade)

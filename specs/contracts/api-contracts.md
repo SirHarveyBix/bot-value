@@ -1,6 +1,6 @@
 # API Contracts: ValueMomentum Scanner V1
 
-**Branch**: `001-spec-review-fixes` | **Date**: 2026-05-19
+**Branch**: `main` | **Date**: 2026-05-19
 
 ---
 
@@ -95,7 +95,7 @@ analyst_revision_3m: float | None
 v_ok: bool                          # True = pilier Valorisation calculé
 pe_flag: str | None                 # "TTM" si P/E Forward absent
 earnings_date: str | None           # tag 📅 si dans les 14 prochains jours
-warning: str | None                 # tag ⚠️ données périmées si > 120j
+warning: str | None                 # tag ⚠️ données périmées si > 450j
 use_cross_universe_ranking: bool    # True = secteur < 3 tickers (info pour audit)
 first_seen_date: str                # ISO 'YYYY-MM-DD' — depuis SQLite
 ```

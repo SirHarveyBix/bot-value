@@ -24,7 +24,7 @@ Scanner quotidien quantitatif pour Position Trading (horizon 3–6 mois). Archit
 
 **Performance Goals**: Scan complet ≤ 15 min de 09h35 ET à réception Telegram ; Budget FMP ≤ 175 calls/run (disjoncteur hard limit — 30 × 5 = 150 nominal + 25 retry margin, BF-010)
 
-**Constraints**: FMP free tier 250 calls/jour strict ; SHORTLIST_SIZE = 30 non négociable ; hard limit 175 calls/run (BF-010) ; yfinance chunks ≤ 100 tickers + pause 2s ; CACHE_TTL_FUNDAMENTALS = 97200s (27h, anti race condition) ; SQLite local uniquement
+**Constraints**: FMP free tier 250 calls/jour strict ; SHORTLIST_SIZE = 30 non négociable ; hard limit 175 calls/run (BF-010) ; yfinance chunks ≤ 100 tickers + pause 2s ; CACHE_TTL_FUNDAMENTALS = 604800s (7 jours, fondamentaux trimestriels) ; SQLite local uniquement
 
 **Scale/Scope**: ~700 tickers univers, 30 shortlist, 10 signaux Top Actions + 5 ETFs/jour
 
@@ -33,7 +33,7 @@ Scanner quotidien quantitatif pour Position Trading (horizon 3–6 mois). Archit
 _GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 
 - [x] **I. Funnel Architecture**: Chalutier/Sniper separation respected. FMP-only for fundamentals (ROE, marges, dette/EBITDA, FCF, P/E forward, surprise earnings, révisions analystes). No yfinance fallback for balance sheet data (Règle d'Or §16). ETF pipeline momentum-only 50% Perf 6M + 50% Surperf vs SPY (sector rotation framing, not value). Leveraged/inverse ETFs excluded by name pattern.
-- [x] **II. Quality & Stability**: ROE 3Y from FMP `income-statement` (3 annual periods) — no TTM fallback, no yfinance. `book_value_per_share ≤ 0` → exclude (ROE mathématiquement sans sens). `ROE > 150%` + `BVS < $5` → cap percentile 80 + flag `⚠️ ROE possiblement gonflé par buybacks`. Utilities/Financials/REITs excluded from debt/EBITDA gate (3-criteria quality pillar instead). Data freshness: 365d warn flag, 450d exclusion (bilans annuels FMP — BF-028).
+- [x] **II. Quality & Stability**: ROE 3Y from FMP `income-statement` (3 annual periods) — no TTM fallback, no yfinance. `book_value_per_share ≤ 0` → exclude (ROE mathématiquement sans sens). `ROE > 150%` + `BVS < $5` → cap percentile 80 + flag `⚠️ ROE possiblement gonflé par buybacks`. Utilities/Financials/REITs excluded from debt/EBITDA gate (3-criteria quality pillar instead). Data freshness: 450d warn flag, 700d exclusion (bilans annuels FMP — BF-028).
 - [x] **III. Market Gate**: 4-level priority cascade intact — Panique VIX > 35 (scan annulé, 0 signaux, 1 entrée `scans` regime='panic'), Prudence SPY < EMA200 + VIX 25–35 (flag sur chaque signal), Bear Light SPY < EMA200 + VIX ≤ 25 (log interne uniquement), Normal (Top 10 complet). VIX evaluated before EMA200 (VIX = leading indicator, EMA200 = lagging).
 - [x] **IV. Institutional Liquidity**: Cap > $2B, Dollar Vol > $5M (20d avg), Price > $5, NYSE/NASDAQ/AMEX only. OTC et tickers hors-US exclus.
 - [x] **V. Quantitative Momentum**: 5 sub-criteria — Perf 6M (30%), Surperf sectorielle 6M (30%), Perf 3M (15%), Earnings Surprise avec décroissance linéaire 90j (15%), Révision analystes 3M (10%). Pénalités anti-extrême : 1M > +25% → -10 pts, 1M < -20% → -5 pts sur score momentum final.
@@ -68,7 +68,7 @@ valuemomentum-scanner/
 │   ├── universe.py              # Module 1 : Universe Builder + refresh auto
 │   ├── fetcher.py               # Module 2 : Data Fetcher
 │   │                              — yfinance OHLCV chunked (100 tickers, pause 2s)
-│   │                              — FMP httpx.AsyncClient + cache 27h + disjoncteur 175 calls (BF-010)
+│   │                              — FMP httpx.AsyncClient + cache 7 jours + disjoncteur 175 calls (BF-010)
 │   │                              — Validation None-safe de toutes les données externes
 │   ├── scoring/
 │   │   ├── __init__.py
@@ -86,7 +86,7 @@ valuemomentum-scanner/
 │   │   └── tickers_universe.json  # Master list actions + ETFs
 │   ├── signals/
 │   │   └── scanner_history.db     # SQLite WAL
-│   ├── cache/                     # Cache fondamentaux 27h (JSON par ticker)
+│   ├── cache/                     # Cache fondamentaux 7 jours (JSON par ticker)
 │   └── logs/
 │
 ├── web/
@@ -125,7 +125,7 @@ Décisions architecturales documentées dans `spec.md` §Préambule (Actes 1–4
 
 | Fichier              | Contenu                                                                                                        |
 | -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `config.yaml`        | Toutes les constantes (SHORTLIST_SIZE=30, VIX thresholds, TTL cache 97200s, chunk sizes, FMP budget 175, etc.) |
+| `config.yaml`        | Toutes les constantes (SHORTLIST_SIZE=30, VIX thresholds, TTL cache 604800s (7j), chunk sizes, FMP budget 175, etc.) |
 | `.env.example`       | Template secrets (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, FMP_API_KEY)                                           |
 | `requirements.txt`   | Dépendances épinglées (voir §10 spec)                                                                          |
 | `scanner/storage.py` | Création tables SQLite WAL : `scans`, `signals`, `scanned_universe`, `universe_metadata`                       |
@@ -148,7 +148,7 @@ Décisions architecturales documentées dans `spec.md` §Préambule (Actes 1–4
 
 | Fichier                               | Contenu clé                                                                                                 |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `data/universe/tickers_universe.json` | Master list S&P 500 + Nasdaq 100 + ETFs sectoriels SPDR                                                     |
+| `data/universe/tickers_universe.json` | Master list via FMP Screener (exchange=NYSE/NASDAQ, marketCapMoreThan=2B, country=US) — voir `scanner/refresh_universe.py screener` |
 | `scanner/universe.py`                 | `build_eligible_universe()` : filtres (cap > 2B$, vol > 5M$, prix > 5$, NYSE/NASDAQ/AMEX, ancienneté 2 ans) |
 | `scanner/fetcher.py`                  | `fetch_prices_chunked()` : chunks 100, pause 2s, `threads=False`, fallback < 60% batch                      |
 | `main.py`                             | MIN_UNIVERSE_SIZE check (≥ 100 tickers post-éligibilité) avant shortlisting                                 |
@@ -197,9 +197,9 @@ Décisions architecturales documentées dans `spec.md` §Préambule (Actes 1–4
 
 | Fichier                        | Contenu clé                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `scanner/fetcher.py`           | `fetch_fmp_fundamentals(ticker)` : 5 endpoints httpx, cache 27h, disjoncteur 175 calls (BF-010), 2 retries max |
+| `scanner/fetcher.py`           | `fetch_fmp_fundamentals(ticker)` : 5 endpoints httpx, cache 7 jours, disjoncteur 175 calls (BF-010), 2 retries max |
 | `scanner/scoring/quality.py`   | ROE 3Y (FMP only), gates BVS, cap ROE > 150%, winsorisation, exclusion Financials/RE/Utilities        |
-| `scanner/scoring/valuation.py` | P/E Forward (FMP), EV/EBITDA, PEG ; fallback P/E TTM -5pts ; repondération si pilier absent           |
+| `scanner/scoring/valuation.py` | P/E Forward (FMP), EV/EBITDA, PEG ; repondération si pilier absent                                    |
 | `scanner/scoring/momentum.py`  | 5 critères, décroissance earnings 90j, pénalités anti-extrême ±1M                                     |
 | `scanner/scoring/engine.py`    | Percentile ranking (cross-universe / intra-secteur GICS), winsorisation RATIO_CLAMP, score global     |
 
@@ -362,7 +362,7 @@ python main.py --now --force
 | `FMP_MAX_RETRIES`            | 2      | Hard max                          |
 | `YFINANCE_CHUNK_SIZE`        | 100    | Tickers par batch                 |
 | `YFINANCE_CHUNK_DELAY_S`     | 2.0    | Pause inter-chunks                |
-| `CACHE_TTL_FUNDAMENTALS`     | 97200  | 27h (anti race condition TTL 24h) |
+| `CACHE_TTL_FUNDAMENTALS`     | 604800 | 7 jours (fondamentaux trimestriels, quota FMP préservé) |
 | `VIX_PANIC_THRESHOLD`        | 35     | Seuil Panique                     |
 | `VIX_WARNING_THRESHOLD`      | 25     | Seuil Prudence                    |
 | `MIN_UNIVERSE_SIZE`          | 100    | En dessous → scan annulé          |
@@ -374,8 +374,8 @@ python main.py --now --force
 | Risque                         | Mitigation spécifiée                                          |
 | ------------------------------ | ------------------------------------------------------------- |
 | yfinance HTTP 429              | Chunks 100 + pause 2s + `threads=False` (§3bis.2.1)           |
-| FMP quota 250/jour             | Disjoncteur 175 calls + cache 27h (§2, §3bis.2.4 — BF-010)   |
-| Race condition cache           | TTL 27h vs 24h (§3bis.2.4)                                    |
+| FMP quota 250/jour             | Disjoncteur 175 calls + cache 7 jours (§2, §3bis.2.4 — BF-010) |
+| Cache TTL                      | 7 jours — fondamentaux trimestriels, quota FMP préservé        |
 | Survivorship bias backtesting  | Table `scanned_universe` complète (§7.2)                      |
 | Ratios aberrants (parsing FMP) | Winsorisation `RATIO_CLAMP` avant percentile (§4.1)           |
 | Boot Mac Mini après coupure    | launchd `KeepAlive=true` + supervisord `startretries=5` (§11) |

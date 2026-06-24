@@ -14,7 +14,7 @@
 
 **Objectif** : Scaffolding projet + configuration + SQLite + scheduler vide fonctionnel
 
-- [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 175`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 97200`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 365`, `DATA_FRESHNESS_EXCLUSION_DAYS: 450`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
+- [x] T001 Créer `config.yaml` à la racine avec TOUTES les constantes métier : `SHORTLIST_SIZE: 30`, `FMP_CALL_BUDGET_HARD_LIMIT: 175`, `FMP_MAX_RETRIES: 2`, `YFINANCE_CHUNK_SIZE: 100`, `YFINANCE_CHUNK_DELAY_S: 2.0`, `CACHE_TTL_FUNDAMENTALS: 604800`, `CACHE_TTL_PRICE_HISTORY: 14400`, `VIX_PANIC_THRESHOLD: 35`, `VIX_WARNING_THRESHOLD: 25`, `MIN_UNIVERSE_SIZE: 100`, `TELEGRAM_MAX_CHARS: 4096`, `MAX_TICKERS_PER_SECTOR: 3`, `DATA_FRESHNESS_WARNING_DAYS: 450`, `DATA_FRESHNESS_EXCLUSION_DAYS: 700`, `EARNINGS_WINDOW_DAYS: 14`, `INTER_REQUEST_DELAY: 1.0`
 - [x] T002 [P] Créer `.env.example` à la racine avec placeholders : `TELEGRAM_BOT_TOKEN=`, `TELEGRAM_CHAT_ID=`, `FMP_API_KEY=`
 - [x] T003 [P] Créer/vérifier `requirements.txt` avec dépendances épinglées : `yfinance>=0.2.40,<0.3.0`, `pandas>=2.1.0,<3.0.0`, `numpy>=1.26.0,<2.0.0`, `apscheduler>=4.0.0a5`, `pandas-market-calendars>=4.3.0`, `python-telegram-bot>=21.0,<22.0`, `httpx>=0.27.0,<0.28.0`, `PyYAML>=6.0.1,<7.0.0`, `python-dotenv>=1.0.0,<2.0.0`, `loguru>=0.7.2,<1.0.0`, `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`, `vcrpy`, `freezegun`, `supervisor>=4.2.0`
 - [x] T004 [P] Créer les packages Python vides : `scanner/__init__.py`, `scanner/scoring/__init__.py`
@@ -36,11 +36,11 @@
 - [x] T009 Implémenter `scanner/universe.py` : `build_eligible_universe(tickers, prices_df)` → filtres éligibilité (marketCap > 2B$, volume_dollar_20j > 5M$, price > 5$, listing NYSE/NASDAQ/AMEX, ancienneté > 2 ans d'historique), retourne DataFrame des tickers éligibles
 - [x] T010 Implémenter `scanner/fetcher.py` : `fetch_prices_chunked(tickers, period)` → découpe en chunks `YFINANCE_CHUNK_SIZE`, `yf.download(..., threads=False)`, `asyncio.sleep(YFINANCE_CHUNK_DELAY_S)` entre chunks, log `batch_partial_failure` si chunk < 60% valides — chaque chunk DOIT être wrappé dans `asyncio.wait_for(..., timeout=60.0)` pour éviter épuisement du ThreadPool si Yahoo Finance gèle silencieusement
 - [x] T011 [P] Implémenter `scanner/fetcher.py` : `FMPClient` (`httpx.AsyncClient`, `base_url`, `api_key`), jitter `random.uniform(0.8, 1.5)`, `FMP_MAX_RETRIES=2` avec backoff exponentiel, skip + flag si ticker échoue 2 fois
-- [x] T012 Implémenter `scanner/fetcher.py` : cache fondamentaux 27h (TTL `cache_ttl_fundamentals: 97200` depuis config, champs `fetched_at` via `cache.set`)
+- [x] T012 Implémenter `scanner/fetcher.py` : cache fondamentaux 7 jours (TTL `cache_ttl_fundamentals: 604800` depuis config, champs `fetched_at` via `cache.set`)
 - [x] T013 Implémenter `scanner/fetcher.py` : compteur global `fmp_call_counter = 0`, disjoncteur `if fmp_call_counter + 7 > budget_limit → return None`, reset dans `main.py` à chaque scan
 - [x] T014 Ajouter check `MIN_UNIVERSE_SIZE` dans `main.py` après `build_eligible_universe()` et AVANT shortlisting : si `len(eligible) < 100` → log `universe_too_small`, envoyer alerte Telegram erreur, return sans scan
 
-**Checkpoint** : `fetch_prices_chunked(700_tickers)` → 0 HTTP 429, data valide. `fmp_fetch()` → disjoncteur à 175. Cache 27h créé et relu correctement.
+**Checkpoint** : `fetch_prices_chunked(700_tickers)` → 0 HTTP 429, data valide. `fmp_fetch()` → disjoncteur à 175. Cache 7 jours créé et relu correctement.
 
 ---
 
@@ -74,7 +74,7 @@
 - [x] T025 [US1] Créer `scanner/scoring/quality.py` : `calculate_quality_metrics(ticker_info) -> dict` → `roe_3y` (moyenne ROE 3 bilans annuels FMP, jamais TTM ni yfinance), `operating_margin` (`operatingProfitMarginTTM`), `fcf_yield` (`freeCashFlowTTM / marketCap`), `debt_ebitda` (`netDebt / ebitda`)
 - [x] T026 [US1] Implémenter `apply_quality_gates(metrics, ticker_info) -> tuple[bool, str|None, list[str]]` dans `quality.py` : BVS ≤ 0 → exclude "book_value_per_share <= 0", ROE is None → exclude "ROE 3 ans indisponible", ROE < 0 → exclude "ROE négatif", EBITDA ≤ 0 → exclude, debt_ebitda > 6 → exclude, ROE > 1.50 + BVS < 5$ → flag `⚠️ ROE possiblement gonflé par buybacks` + `metrics["roe_capped"] = True`
 - [x] T027 [P] [US1] Implémenter exceptions sectorielles dans `quality.py` : `exclude_debt = sector in ["Financials", "Real Estate", "Utilities"]` → pilier Qualité sur 3 critères (ROE, marge op., FCF yield) si True
-- [x] T028 [US1] Créer `scanner/scoring/valuation.py` : `calculate_valuation_metrics(ticker_info) -> dict` → `pe_ratio` (`peRatioTTM`, fallback P/E TTM -5pts si Forward absent), `ev_ebitda` (`enterpriseValueMultipleTTM`), `peg_ratio` (`pegRatioTTM`); repondération si P/E + EV/EBITDA tous absents → `score_global = qualite×0.50 + momentum×0.50`
+- [x] T028 [US1] Créer `scanner/scoring/valuation.py` : `calculate_valuation_metrics(ticker_info) -> dict` → `pe_ratio` (`peRatioTTM`), `ev_ebitda` (`enterpriseValueMultipleTTM`), `peg_ratio` (`pegRatioTTM`); repondération si P/E + EV/EBITDA tous absents → `score_global = qualite×0.50 + momentum×0.50` ~~(fallback P/E TTM -5pts supprimé — BF-018)~~
 - [x] T029 [US1] Créer `scanner/scoring/momentum.py` : `calculate_momentum_metrics(ticker_info, prices_df, sector) -> dict` → `perf_6m` (J0/J-126 -1), `surperf_6m` (perf_6m - perf_6m_SECTOR_ETF), `perf_3m` (J0/J-63 -1), `surprise_earnings` (via `earnings-surprises` FMP), `revision_analystes` (via `analyst-estimates` FMP)
 - [x] T030 [US1] Implémenter décroissance earnings dans `momentum.py` : `days_since = (today - last_earnings_date).days`, `decay = max(0.0, min(1.0, 1.0 - days_since / 90))`, redistribution proportionnelle des poids libérés aux 4 autres critères
 - [x] T031 [US1] Implémenter pénalités anti-extrême dans `momentum.py` : `perf_1m > 0.25` → `-10 pts`, `perf_1m < -0.20` → `-5 pts`, score momentum clampé `[0, 100]`
@@ -99,7 +99,7 @@
 **Test indépendant** : Injecter tickers BVS ≤ 0 / ROE None / sector=None / données > 450j → vérifier exclusions + logs corrects
 
 - [x] T041 [US3] Ajouter exclusion sector=None dans `scanner/universe.py` (ou `engine.py`) : log `sector_missing` avec ticker, exclure du pipeline Actions, maintenir dans univers pour runs suivants
-- [x] T042 [US3] Implémenter `data_freshness_check(ticker_data) -> tuple[bool, list[str]]` dans `scanner/filters.py` : calcule `days_since_report = (today - last_report_date).days`; > 365j → flag `⚠️ données potentiellement périmées`; > 450j → retourne `(False, ["données trop vieilles"])` (exclu ranking)
+- [x] T042 [US3] Implémenter `data_freshness_check(ticker_data) -> tuple[bool, list[str]]` dans `scanner/filters.py` : calcule `days_since_report = (today - last_report_date).days`; > 450j → flag `⚠️ données potentiellement périmées`; > 700j → retourne `(False, ["données trop vieilles"])` (exclu ranking)
 - [x] T043 [US3] Implémenter `earnings_calendar_check(ticker, calendar_data) -> str|None` dans `scanner/filters.py` : date earnings dans `[today, today + 14j]` → retourne `📅 Earnings à venir : {date}` (tag informatif, non bloquant)
 - [x] T044 [US3] Implémenter concentration sectorielle dans `scanner/filters.py` : `apply_sector_concentration(ranked_df, max_per_sector=3) -> DataFrame` → si secteur dépasse plafond, remplace overflow par meilleurs tickers restants hors-secteur
 - [x] T045 [US3] Câbler `filters.py` dans pipeline `engine.py` / `main.py` : freshness check avant ranking final, earnings tag ajouté aux `flags` JSON du signal, concentration sectorielle appliquée sur Top 10 avant envoi

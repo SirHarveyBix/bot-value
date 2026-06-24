@@ -399,9 +399,11 @@ bot-value/
 ├── .env                       # Secrets (non versionné)
 ├── .env.example               # Modèle de configuration
 ├── scanner/
+│   ├── cache.py               # Cache SQLite TTL namespaces FMP/yfinance
 │   ├── config.py              # Chargement config + logging
 │   ├── fetcher.py             # Récupération données (yfinance + FMP)
 │   ├── filters.py             # Filtres pré/post scoring
+│   ├── market_gate.py         # Filtre régime de marché (VIX + SPY momentum)
 │   ├── notifier.py            # Envoi Telegram
 │   ├── scoring/               # Moteur de scoring (qualité, valuation, momentum)
 │   ├── storage.py             # Base de données SQLite
